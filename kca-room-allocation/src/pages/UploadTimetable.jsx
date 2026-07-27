@@ -1,26 +1,43 @@
 import { useState, useRef } from 'react';
+import axios from 'axios';
 
 export default function UploadTimetable() {
   const [isDragActive, setIsDragActive] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState(null);
   const fileInputRef = useRef(null);
 
+  const processUpload = async (file) => {
+    if (!file.name.endsWith('.xlsx')) {
+      setUploadMessage({ type: 'error', text: 'Strictly accepts .xlsx files only.' });
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadMessage(null);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      // Send the file to the FastAPI backend
+      const response = await axios.post('http://localhost:8000/api/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      
+      setUploadMessage({ type: 'success', text: response.data.message });
+    } catch (error) {
+      const errorText = error.response?.data?.detail || 'An error occurred during upload.';
+      setUploadMessage({ type: 'error', text: errorText });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   // Drag and Drop Handlers
-  const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDragIn = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragActive(true);
-  };
-
-  const handleDragOut = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragActive(false);
-  };
+  const handleDrag = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const handleDragIn = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragActive(true); };
+  const handleDragOut = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragActive(false); };
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -28,20 +45,18 @@ export default function UploadTimetable() {
     setIsDragActive(false);
     
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
-      alert(`File dropped: ${droppedFile.name}`);
+      processUpload(e.dataTransfer.files[0]);
     }
   };
 
   // Button Click Handler
-  const handleBrowseClick = () => {
-    fileInputRef.current.click();
-  };
+  const handleBrowseClick = () => fileInputRef.current.click();
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      alert(`File selected: ${selectedFile.name}`);
+      processUpload(e.target.files[0]);
+      // Reset the input value so the same file can be uploaded again if needed
+      e.target.value = null; 
     }
   };
 
@@ -53,7 +68,6 @@ export default function UploadTimetable() {
       </div>
 
       <div className="flex-grow flex flex-col items-center justify-center">
-        {/* Hidden File Input */}
         <input 
           type="file" 
           ref={fileInputRef} 
@@ -62,11 +76,10 @@ export default function UploadTimetable() {
           className="hidden" 
         />
 
-        {/* Drag and Drop Zone - Stitch UI Restored */}
         <div 
           className={`w-full max-w-3xl bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(15,76,129,0.05)] border-2 border-dashed p-12 md:p-20 text-center transition-all duration-300 ease-in-out relative group cursor-pointer overflow-hidden ${
             isDragActive ? 'border-primary bg-blue-50' : 'border-primary/30 hover:border-primary/50'
-          }`}
+          } ${isUploading ? 'opacity-75 pointer-events-none' : ''}`}
           onDragEnter={handleDragIn}
           onDragLeave={handleDragOut}
           onDragOver={handleDrag}
@@ -77,75 +90,50 @@ export default function UploadTimetable() {
             <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-colors duration-300 ${
               isDragActive ? 'bg-primary/10' : 'bg-surface-container-low group-hover:bg-primary-container/10'
             }`}>
-              <span className={`material-symbols-outlined text-[40px] transition-colors duration-300 ${
-                isDragActive ? 'text-secondary-container scale-110' : 'text-primary group-hover:text-secondary-container'
-              }`} style={{ fontVariationSettings: "'FILL' 1" }}>
-                cloud_upload
-              </span>
+              {isUploading ? (
+                <span className="material-symbols-outlined text-[40px] text-primary animate-spin">sync</span>
+              ) : (
+                <span className={`material-symbols-outlined text-[40px] transition-colors duration-300 ${
+                  isDragActive ? 'text-secondary-container scale-110' : 'text-primary group-hover:text-secondary-container'
+                }`} style={{ fontVariationSettings: "'FILL' 1" }}>
+                  cloud_upload
+                </span>
+              )}
             </div>
             
             <div>
-              <h3 className="font-title-md text-[20px] font-semibold text-on-surface mb-2">Drag and drop your file here</h3>
-              <p className="font-body-sm text-[14px] text-on-surface-variant mb-6">Or click to browse from your computer</p>
-            </div>
-
-            <div className="flex flex-col items-center gap-4">
-              <button 
-                className="bg-primary text-on-primary font-label-md text-[14px] px-6 py-3 rounded-lg hover:shadow-[0_4px_12px_rgba(0,53,95,0.2)] hover:-translate-y-0.5 transition-all duration-200 pointer-events-auto shadow-sm"
-                onClick={(e) => {
-                  e.stopPropagation(); // Prevents double-firing from the container click
-                  handleBrowseClick();
-                }}
-              >
-                Browse Files
-              </button>
-              <p className="font-mono-sm text-[13px] text-outline flex items-center gap-1 mt-4">
-                <span className="material-symbols-outlined text-[16px]">info</span>
-                Accepts .xlsx files only
+              <h3 className="font-title-md text-[20px] font-semibold text-on-surface mb-2">
+                {isUploading ? 'Processing File...' : 'Drag and drop your file here'}
+              </h3>
+              <p className="font-body-sm text-[14px] text-on-surface-variant mb-6">
+                {isUploading ? 'Parsing rows and updating database' : 'Or click to browse from your computer'}
               </p>
             </div>
-          </div>
-          {/* Decorative background element */}
-          <div className="absolute -bottom-24 -right-24 w-64 h-64 bg-primary/5 rounded-full blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none"></div>
-        </div>
 
-        {/* Recent Uploads / Status Card */}
-        <div className="w-full max-w-3xl mt-stack-lg">
-          <h4 className="font-label-md text-[14px] text-on-surface-variant uppercase tracking-wider mb-4 pl-2 border-l-2 border-secondary-container font-semibold">
-            Recent Activity
-          </h4>
-          <div className="bg-surface-container-lowest rounded-lg shadow-[0_4px_20px_rgba(15,76,129,0.05)] border border-outline-variant/10 divide-y divide-outline-variant/10 overflow-hidden">
-            
-            <div className="p-4 flex items-center justify-between hover:bg-surface-container-low/50 transition-colors">
-              <div className="flex items-center gap-4">
-                <span className="material-symbols-outlined text-outline">description</span>
-                <div>
-                  <p className="font-body-sm text-[14px] font-medium text-on-surface">Fall_Semester_Draft_v2.xlsx</p>
-                  <p className="font-mono-sm text-[13px] text-on-surface-variant">Yesterday, 14:30</p>
-                </div>
+            {!isUploading && (
+              <div className="flex flex-col items-center gap-4">
+                <button 
+                  className="bg-primary text-on-primary font-label-md text-[14px] px-6 py-3 rounded-lg hover:shadow-[0_4px_12px_rgba(0,53,95,0.2)] hover:-translate-y-0.5 transition-all duration-200 pointer-events-auto shadow-sm"
+                  onClick={(e) => { e.stopPropagation(); handleBrowseClick(); }}
+                >
+                  Browse Files
+                </button>
               </div>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-secondary-container/20 text-secondary">
-                <span className="w-1.5 h-1.5 rounded-full bg-secondary"></span>
-                Draft
-              </span>
-            </div>
-
-            <div className="p-4 flex items-center justify-between hover:bg-surface-container-low/50 transition-colors">
-              <div className="flex items-center gap-4">
-                <span className="material-symbols-outlined text-outline">description</span>
-                <div>
-                  <p className="font-body-sm text-[14px] font-medium text-on-surface">Spring_Semester_Final.xlsx</p>
-                  <p className="font-mono-sm text-[13px] text-on-surface-variant">Oct 12, 09:15</p>
-                </div>
-              </div>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
-                <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
-                Active
-              </span>
-            </div>
-
+            )}
           </div>
         </div>
+
+        {/* Status Messages */}
+        {uploadMessage && (
+          <div className={`mt-6 p-4 w-full max-w-3xl rounded-lg flex items-center gap-3 ${
+            uploadMessage.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'
+          }`}>
+            <span className="material-symbols-outlined">
+              {uploadMessage.type === 'success' ? 'check_circle' : 'error'}
+            </span>
+            <p className="font-body-lg text-[14px] font-medium">{uploadMessage.text}</p>
+          </div>
+        )}
       </div>
     </>
   );
