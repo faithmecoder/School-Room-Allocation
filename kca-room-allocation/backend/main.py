@@ -1,10 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from database import connect_to_mongo, close_mongo_connection, db_manager
+from routers import rooms
 import pandas as pd
 import io
 
 app = FastAPI(title="Room Allocation System API")
+app.include_router(rooms.router)
 
 # Configure CORS
 app.add_middleware(
@@ -82,8 +84,28 @@ async def upload_timetable(file: UploadFile = File(...)):
                     parsed_records.append(record)
         
         if parsed_records:
+            # 1. Save the parsed timetable data
             await db_manager.timetables.delete_many({})
             await db_manager.timetables.insert_many(parsed_records)
+            
+            # 2. Extract unique rooms and save them to the rooms collection
+            unique_room_codes = {
+                str(record["allocation"]["room_code"]).strip() 
+                for record in parsed_records 
+                if record.get("allocation") and record["allocation"].get("room_code")
+            }
+            
+            invalid_rooms = ["", "NAN", "NONE", "VIRTUAL", "ZOOM"]
+            
+            for code in unique_room_codes:
+                if code.upper() not in invalid_rooms:
+                    existing_room = await db_manager.rooms.find_one({"room_code": code})
+                    if not existing_room:
+                        await db_manager.rooms.insert_one({
+                            "room_code": code,
+                            "capacity": 0,
+                            "room_type": "Pending"
+                        })
             
         return {
             "status": "success", 
@@ -93,49 +115,20 @@ async def upload_timetable(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
-# --- NEW DATA ENDPOINTS ---
+# --- DATA ENDPOINTS ---
 
 @app.get("/api/dashboard-stats")
 async def get_dashboard_stats():
     try:
         total_classes = await db_manager.timetables.count_documents({})
-        unique_rooms = await db_manager.timetables.distinct("allocation.room_code")
+        total_rooms = await db_manager.rooms.count_documents({})
         unique_cohorts = await db_manager.timetables.distinct("cohort")
         
         return {
             "total_classes": total_classes,
-            "total_rooms": len(unique_rooms),
+            "total_rooms": total_rooms,
             "active_cohorts": len(unique_cohorts)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/rooms")
-async def get_real_rooms():
-    try:
-        pipeline = [
-            {"$group": {
-                "_id": "$allocation.room_code",
-                "room_type": {"$first": "$allocation.room_type"}
-            }},
-            {"$sort": {"_id": 1}}
-        ]
-        cursor = db_manager.timetables.aggregate(pipeline)
-        rooms_list = await cursor.to_list(length=100)
-        
-        formatted_rooms = []
-        for r in rooms_list:
-            # Prevent empty or 'nan' rooms from appearing in the UI
-            if r["_id"] and str(r["_id"]).lower() != "nan":
-                formatted_rooms.append({
-                    "code": r["_id"],
-                    "name": f"Facility {r['_id']}",
-                    "type": r["room_type"] or "Physical",
-                    "capacity": 100, 
-                    "status": "Active"
-                })
-        
-        return formatted_rooms
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
