@@ -1,104 +1,227 @@
-// kca-room-allocation/src/pages/RoomManagement.jsx
+// src/pages/RoomManagement.jsx
 import React, { useState, useEffect } from 'react';
 
 export default function RoomManagement() {
   const [rooms, setRooms] = useState([]);
-  const [formData, setFormData] = useState({ room_code: '', capacity: '', room_type: 'Lecture Hall' });
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
 
-  // Fetch rooms on component mount
+  // Form state for adding new room manually
+  const [formData, setFormData] = useState({
+    room_code: '',
+    capacity: '',
+    room_type: 'Lecture Hall'
+  });
+
+  // State for row currently being edited inline
+  const [editingId, setEditingId] = useState(null);
+  const [editFields, setEditFields] = useState({ capacity: '', room_type: 'Lecture Hall' });
+
   useEffect(() => {
     fetchRooms();
   }, []);
 
   const fetchRooms = async () => {
+    setLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/rooms/');
-      if (response.ok) {
-        const data = await response.json();
+      const res = await fetch('http://localhost:8000/api/rooms/');
+      if (res.ok) {
+        const data = await res.json();
         setRooms(data);
+      } else {
+        setError('Failed to fetch rooms from backend.');
       }
     } catch (err) {
-      console.error("Failed to fetch rooms", err);
+      setError('Cannot connect to backend server.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+  const handleSyncRooms = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/rooms/sync', { method: 'POST' });
+      if (res.ok) {
+        const result = await res.json();
+        alert(result.message);
+        fetchRooms();
+      }
+    } catch (err) {
+      alert('Failed to sync rooms from database.');
+    }
   };
 
-  const handleSubmit = async (e) => {
+  const handleAddSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    
     try {
-      const response = await fetch('http://localhost:8000/api/rooms/', {
+      const res = await fetch('http://localhost:8000/api/rooms/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          room_code: formData.room_code,
-          capacity: parseInt(formData.capacity),
+          room_code: formData.room_code.trim(),
+          capacity: parseInt(formData.capacity, 10),
           room_type: formData.room_type
         })
       });
 
-      if (response.ok) {
+      if (res.ok) {
         setFormData({ room_code: '', capacity: '', room_type: 'Lecture Hall' });
-        fetchRooms(); // Refresh the table
+        fetchRooms();
       } else {
-        const errData = await response.json();
-        setError(errData.detail || 'Failed to add room');
+        const data = await res.json();
+        setError(data.detail || 'Failed to add room.');
       }
     } catch (err) {
-      setError('Network error. Is the backend running?');
+      setError('Network error while adding room.');
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this room?")) return;
-    
+  const startEdit = (room) => {
+    setEditingId(room.id);
+    setEditFields({
+      capacity: room.capacity === 0 ? '' : room.capacity,
+      room_type: room.room_type === 'Pending' ? 'Lecture Hall' : room.room_type
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditFields({ capacity: '', room_type: 'Lecture Hall' });
+  };
+
+  const handleSaveEdit = async (id) => {
+    if (!editFields.capacity || parseInt(editFields.capacity, 10) <= 0) {
+      alert('Please enter a valid capacity greater than 0.');
+      return;
+    }
+
     try {
-      const response = await fetch(`http://localhost:8000/api/rooms/${id}`, {
-        method: 'DELETE'
+      const res = await fetch(`http://localhost:8000/api/rooms/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          capacity: parseInt(editFields.capacity, 10),
+          room_type: editFields.room_type
+        })
       });
-      if (response.ok) {
+
+      if (res.ok) {
+        setEditingId(null);
         fetchRooms();
+      } else {
+        const data = await res.json();
+        alert(data.detail || 'Failed to update room.');
       }
     } catch (err) {
-      console.error("Failed to delete room", err);
+      alert('Network error while updating room.');
     }
   };
+
+  const handleDelete = async (id, roomCode) => {
+    if (!window.confirm(`Are you sure you want to delete "${roomCode}"?`)) return;
+
+    try {
+      const res = await fetch(`http://localhost:8000/api/rooms/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setRooms(rooms.filter((r) => r.id !== id));
+      } else {
+        alert('Failed to delete room.');
+      }
+    } catch (err) {
+      alert('Network error while deleting room.');
+    }
+  };
+
+  const filteredRooms = rooms.filter((r) =>
+    r.room_code.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">Room Management</h1>
-      
-      {/* Add Room Form */}
-      <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-8">
-        <h2 className="text-lg font-semibold mb-4">Add New Room</h2>
-        {error && <p className="text-red-500 mb-4 text-sm">{error}</p>}
-        
-        <form onSubmit={handleSubmit} className="flex gap-4 items-end">
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Room Code (e.g., LAB 1)</label>
-            <input type="text" name="room_code" value={formData.room_code} onChange={handleChange} required className="w-full border border-gray-300 rounded-md p-2" />
+      {/* Header */}
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800">Room Management</h1>
+          <p className="text-sm text-gray-500">Configure lecture hall capacities and facility types.</p>
+        </div>
+        <button
+          onClick={handleSyncRooms}
+          className="bg-purple-700 hover:bg-purple-800 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors shadow-sm"
+        >
+          Sync Missing Rooms from Database
+        </button>
+      </div>
+
+      {/* Add Room Card */}
+      <div className="bg-white p-5 rounded-lg shadow-sm border border-gray-200 mb-6">
+        <h2 className="text-base font-semibold text-gray-800 mb-3">Add New Room Manually</h2>
+        {error && <div className="p-3 mb-4 text-sm text-red-700 bg-red-50 rounded-md border border-red-200">{error}</div>}
+
+        <form onSubmit={handleAddSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Room Code</label>
+            <input
+              type="text"
+              placeholder="e.g., LAB 1"
+              value={formData.room_code}
+              onChange={(e) => setFormData({ ...formData, room_code: e.target.value })}
+              required
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
           </div>
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Capacity</label>
-            <input type="number" name="capacity" value={formData.capacity} onChange={handleChange} required min="1" className="w-full border border-gray-300 rounded-md p-2" />
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Capacity</label>
+            <input
+              type="number"
+              min="1"
+              placeholder="e.g., 60"
+              value={formData.capacity}
+              onChange={(e) => setFormData({ ...formData, capacity: e.target.value })}
+              required
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
           </div>
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Room Type</label>
-            <select name="room_type" value={formData.room_type} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 bg-white">
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Room Type</label>
+            <select
+              value={formData.room_type}
+              onChange={(e) => setFormData({ ...formData, room_type: e.target.value })}
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+            >
               <option value="Lecture Hall">Lecture Hall</option>
               <option value="Laboratory">Laboratory</option>
               <option value="Virtual">Virtual (Zoom)</option>
+              <option value="Amphitheatre">Amphitheatre</option>
             </select>
           </div>
-          <button type="submit" className="bg-blue-900 text-white px-6 py-2 rounded-md hover:bg-blue-800 transition-colors">
+
+          <button
+            type="submit"
+            className="bg-blue-900 hover:bg-blue-800 text-white font-medium px-4 py-2 rounded-md text-sm transition-colors"
+          >
             Save Room
           </button>
         </form>
+      </div>
+
+      {/* Filter / Search Bar */}
+      <div className="flex justify-between items-center mb-3">
+        <input
+          type="text"
+          placeholder="Filter by room code (e.g. LAB, RM)..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-blue-600"
+        />
+        <span className="text-xs text-gray-500 font-medium">
+          Showing {filteredRooms.length} of {rooms.length} facilities
+        </span>
       </div>
 
       {/* Rooms Table */}
@@ -106,30 +229,105 @@ export default function RoomManagement() {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room Code</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Capacity</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+              <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Room Code</th>
+              <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Capacity</th>
+              <th className="px-5 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
+              <th className="px-5 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {rooms.length === 0 ? (
-              <tr><td colSpan="4" className="px-6 py-4 text-center text-gray-500">No rooms added yet.</td></tr>
+          <tbody className="divide-y divide-gray-200 text-sm">
+            {loading ? (
+              <tr><td colSpan="4" className="px-5 py-6 text-center text-gray-400">Loading rooms...</td></tr>
+            ) : filteredRooms.length === 0 ? (
+              <tr><td colSpan="4" className="px-5 py-6 text-center text-gray-400">No matching rooms found.</td></tr>
             ) : (
-              rooms.map((room) => (
-                <tr key={room.id}>
-                  <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">{room.room_code}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-gray-500">{room.capacity}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-gray-500">
-                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                      {room.room_type}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    <button onClick={() => handleDelete(room.id)} className="text-red-600 hover:text-red-900">Delete</button>
-                  </td>
-                </tr>
-              ))
+              filteredRooms.map((room) => {
+                const isEditing = editingId === room.id;
+                return (
+                  <tr key={room.id} className={room.capacity === 0 ? "bg-amber-50/40" : "hover:bg-gray-50"}>
+                    <td className="px-5 py-3.5 font-medium text-gray-900 whitespace-nowrap">
+                      {room.room_code}
+                    </td>
+
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          min="1"
+                          className="w-24 border border-blue-400 rounded px-2 py-1 text-sm focus:outline-none ring-2 ring-blue-100"
+                          value={editFields.capacity}
+                          onChange={(e) => setEditFields({ ...editFields, capacity: e.target.value })}
+                        />
+                      ) : room.capacity === 0 ? (
+                        <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">Needs Capacity</span>
+                      ) : (
+                        <span className="text-gray-700 font-medium">{room.capacity} seats</span>
+                      )}
+                    </td>
+
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      {isEditing ? (
+                        <select
+                          className="border border-blue-400 rounded px-2 py-1 text-sm bg-white focus:outline-none"
+                          value={editFields.room_type}
+                          onChange={(e) => setEditFields({ ...editFields, room_type: e.target.value })}
+                        >
+                          <option value="Lecture Hall">Lecture Hall</option>
+                          <option value="Laboratory">Laboratory</option>
+                          <option value="Virtual">Virtual</option>
+                          <option value="Amphitheatre">Amphitheatre</option>
+                        </select>
+                      ) : (
+                        <span
+                          className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                            room.room_type === 'Pending'
+                              ? 'bg-amber-100 text-amber-800'
+                              : room.room_type === 'Laboratory'
+                              ? 'bg-purple-100 text-purple-800'
+                              : 'bg-blue-100 text-blue-800'
+                          }`}
+                        >
+                          {room.room_type}
+                        </span>
+                      )}
+                    </td>
+
+                    <td className="px-5 py-3.5 text-right whitespace-nowrap font-medium space-x-3">
+                      {isEditing ? (
+                        <>
+                          <button
+                            onClick={() => handleSaveEdit(room.id)}
+                            className="text-emerald-700 hover:text-emerald-900 font-semibold"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={cancelEdit}
+                            className="text-gray-500 hover:text-gray-700"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => startEdit(room)}
+                            className="text-indigo-600 hover:text-indigo-900"
+                          >
+                            Modify
+                          </button>
+                          <button
+                            onClick={() => handleDelete(room.id, room.room_code)}
+                            className="text-rose-600 hover:text-rose-900"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

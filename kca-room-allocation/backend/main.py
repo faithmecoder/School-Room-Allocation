@@ -1,3 +1,5 @@
+import re
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from database import connect_to_mongo, close_mongo_connection, db_manager
@@ -98,11 +100,14 @@ async def upload_timetable(file: UploadFile = File(...)):
             invalid_rooms = ["", "NAN", "NONE", "VIRTUAL", "ZOOM"]
             
             for code in unique_room_codes:
-                if code.upper() not in invalid_rooms:
-                    existing_room = await db_manager.rooms.find_one({"room_code": code})
+                clean_code = str(code).strip()
+                is_date = bool(re.search(r"\d{4}-\d{2}-\d{2}", clean_code))
+                
+                if clean_code.upper() not in invalid_rooms and not is_date:
+                    existing_room = await db_manager.rooms.find_one({"room_code": clean_code})
                     if not existing_room:
                         await db_manager.rooms.insert_one({
-                            "room_code": code,
+                            "room_code": clean_code,
                             "capacity": 0,
                             "room_type": "Pending"
                         })
@@ -144,22 +149,33 @@ async def get_real_conflicts():
                 },
                 "count": {"$sum": 1},
                 "units": {"$push": "$unit_name"},
+                "unique_units": {"$addToSet": "$unit_name"}, # NEW: Collects only unique unit names
                 "cohorts": {"$push": "$cohort"}
             }},
            {"$match": {
-            "count": {"$gt": 1},
-            "_id.room": {"$nin": ["ZOOM", "nan", "", "VIRTUAL"]}
-        }}
+                "count": {"$gt": 1},
+                "_id.room": {"$nin": ["ZOOM", "nan", "", "VIRTUAL"]}
+            }},
+            # NEW STAGE: Only keep records where there are 2 or more DIFFERENT units scheduled
+            {"$match": {
+                "$expr": {"$gt": [{"$size": "$unique_units"}, 1]}
+            }}
         ]
         cursor = db_manager.timetables.aggregate(pipeline)
         conflicts_raw = await cursor.to_list(length=50)
         
         formatted_conflicts = []
         for idx, c in enumerate(conflicts_raw):
+            involved_classes = [
+                f"{cohort} ({unit})" 
+                for cohort, unit in zip(c.get('cohorts', []), c.get('units', []))
+            ]
+            course_display = " vs ".join(involved_classes)
+            
             formatted_conflicts.append({
                 "id": f"CONF-{str(idx+1).zfill(3)}",
                 "room": c["_id"]["room"],
-                "course": f"{c['units'][0]} & {c['units'][1]}",
+                "course": course_display,
                 "issue": f"Double Booking on {c['_id']['day']} at {c['_id']['time']}",
                 "severity": "High"
             })
@@ -167,3 +183,37 @@ async def get_real_conflicts():
         return formatted_conflicts
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/rooms/sync")
+async def sync_rooms_from_db():
+    """Scans existing timetables in the database and extracts missing rooms."""
+    try:
+        # Get all unique rooms currently in the timetables collection
+        unique_rooms = await db_manager.timetables.distinct("allocation.room_code")
+        invalid_rooms = ["", "NAN", "NONE", "VIRTUAL", "ZOOM"]
+        
+        added_count = 0
+        for code in unique_rooms:
+            if not code:
+                continue
+
+            clean_code = str(code).strip()
+            is_date = bool(re.search(r"\d{4}-\d{2}-\d{2}", clean_code))
+
+            if clean_code.upper() not in invalid_rooms and not is_date:
+                existing_room = await db_manager.rooms.find_one({"room_code": clean_code})
+
+                # Only insert if it doesn't already exist in the rooms collection
+                if not existing_room:
+                    await db_manager.rooms.insert_one({
+                        "room_code": clean_code,
+                        "capacity": 0,
+                        "room_type": "Pending"
+                    })
+                    added_count += 1
+
+        return {"message": f"Sync complete! Automatically extracted {added_count} new rooms from existing timetables."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))  
+
+
