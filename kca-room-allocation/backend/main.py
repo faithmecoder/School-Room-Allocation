@@ -10,7 +10,10 @@ from bson import ObjectId
 from fastapi.responses import StreamingResponse
 from typing import Optional
 from collections import defaultdict
-
+from datetime import datetime
+from pydantic import BaseModel
+import xlsxwriter
+from bson import ObjectId
 
 
 app = FastAPI(title="Room Allocation System API")
@@ -744,6 +747,202 @@ async def get_dashboard_stats():
             "total_rooms": len(valid_rooms),
             "utilization_rate": utilization_rate,
             "top_utilized_rooms": utilization_data # Now contains all rooms
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+class VersionRequest(BaseModel):
+    version_name: str
+
+@app.post("/api/versions/snapshot")
+async def create_version_snapshot(request: VersionRequest):
+    """Saves the current master timetable as a versioned snapshot permanently."""
+    try:
+        if not request.version_name.strip():
+            raise HTTPException(status_code=400, detail="Version name is required.")
+
+        current_records = await db_manager.timetables.find({}).to_list(length=None)
+        if not current_records:
+            raise HTTPException(status_code=400, detail="The current timetable is empty. Nothing to save.")
+
+        snapshot = {
+            "version_name": request.version_name,
+            "created_at": datetime.now().isoformat(),
+            "total_classes": len(current_records),
+            "data": current_records
+        }
+
+        # FIXED: Explicitly routes to the same database hosting your timetables
+        await db_manager.timetables.database["timetable_history"].insert_one(snapshot)
+        
+        return {"message": f"Successfully saved version: {request.version_name}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/versions")
+async def get_version_history():
+    """Retrieves a list of all saved timetable versions."""
+    try:
+        # FIXED: Explicit database routing
+        cursor = db_manager.timetables.database["timetable_history"].find({}, {"data": 0}).sort("created_at", -1)
+        history = await cursor.to_list(length=None)
+        
+        formatted_history = []
+        for item in history:
+            formatted_history.append({
+                "id": str(item["_id"]),
+                "version_name": item["version_name"],
+                "created_at": item["created_at"],
+                "total_classes": item["total_classes"]
+            })
+            
+        return formatted_history
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/versions/{version_id}/restore")
+async def restore_version(version_id: str):
+    """Overwrites the active timetable with a previously saved version."""
+    try:
+        # FIXED: Explicit database routing
+        snapshot = await db_manager.timetables.database["timetable_history"].find_one({"_id": ObjectId(version_id)})
+        
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Saved version not found.")
+        if not snapshot.get("data"):
+            raise HTTPException(status_code=400, detail="This version contains no data to restore.")
+
+        await db_manager.timetables.delete_many({})
+        await db_manager.timetables.insert_many(snapshot["data"])
+        
+        return {"message": f"Successfully restored version: {snapshot['version_name']}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/versions/{version_id}/export")
+async def export_version(version_id: str):
+    """Generates the formatted Excel file for a specific archived version."""
+    try:
+        # FIXED: Explicit database routing
+        snapshot = await db_manager.timetables.database["timetable_history"].find_one({"_id": ObjectId(version_id)})
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Version not found.")
+            
+        records = snapshot.get("data", [])
+        if not records:
+            raise HTTPException(status_code=400, detail="No data in this version.")
+
+        grouped_data = defaultdict(lambda: defaultdict(list))
+        for r in records:
+            sheet = r.get("program_sheet", "Other")
+            cohort = r.get("cohort", "UNKNOWN COHORT")
+            
+            grouped_data[sheet][cohort].append({
+                "#": r.get("schedule", {}).get("day_no", ""),
+                "DAY": str(r.get("schedule", {}).get("day", "")).upper(),
+                "TIME": r.get("schedule", {}).get("time_slot", ""),
+                "ROOM TYPE": str(r.get("allocation", {}).get("room_type", "")).upper(),
+                "VENUE": r.get("allocation", {}).get("room_code", ""),
+                "UNIT CODE": r.get("unit_code", ""),
+                "UNIT NAME": r.get("unit_name", ""),
+                "TRIMESTER": r.get("trimester", "")
+            })
+
+        output = io.BytesIO()
+        with xlsxwriter.Workbook(output) as workbook:
+            base_font = 'Times New Roman'
+            cohort_header_format = workbook.add_format({
+                'bold': True, 'font_name': base_font, 'font_size': 14,
+                'font_color': 'white', 'bg_color': '#005eb8', 'valign': 'vcenter', 'border': 1
+            })
+            col_header_format = workbook.add_format({
+                'bold': True, 'font_name': base_font, 'font_size': 11,
+                'align': 'center', 'valign': 'vcenter', 'border': 1
+            })
+            cell_format = workbook.add_format({'font_name': base_font, 'font_size': 11, 'valign': 'vcenter', 'border': 1})
+            centered_cell_format = workbook.add_format({'font_name': base_font, 'font_size': 11, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+
+            columns = ["#", "DAY", "TIME", "ROOM TYPE", "VENUE", "UNIT CODE", "UNIT NAME", "TRIMESTER"]
+            
+            for sheet_name, cohorts_dict in grouped_data.items():
+                safe_sheet_name = re.sub(r'[\\/*?:\[\]]', '', str(sheet_name))[:31].strip()
+                worksheet = workbook.add_worksheet(safe_sheet_name)
+                
+                row_idx = 0
+                col_widths = {c: len(c) for c in columns}
+                
+                for cohort, rows in cohorts_dict.items():
+                    worksheet.merge_range(row_idx, 0, row_idx, len(columns)-1, cohort, cohort_header_format)
+                    row_idx += 1
+                    
+                    for col_num, col_name in enumerate(columns):
+                        worksheet.write(row_idx, col_num, col_name, col_header_format)
+                    row_idx += 1
+                    
+                    for row_data in rows:
+                        for col_num, col_name in enumerate(columns):
+                            val = str(row_data.get(col_name, ""))
+                            fmt = centered_cell_format if col_name == "#" else cell_format
+                            worksheet.write(row_idx, col_num, val, fmt)
+                            if len(val) > col_widths[col_name]: col_widths[col_name] = len(val)
+                        row_idx += 1
+                        
+                for col_num, col_name in enumerate(columns):
+                    width = 5 if col_name == "#" else min(col_widths[col_name] + 2, 50)
+                    worksheet.set_column(col_num, col_num, width)
+
+        output.seek(0)
+        file_name = f"Archived_{snapshot.get('version_name', 'Timetable')}.xlsx"
+        headers = {'Content-Disposition': f'attachment; filename="{file_name}"'}
+        
+        return StreamingResponse(
+            output, headers=headers, 
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/versions/{version_id}/stats")
+async def get_version_stats(version_id: str):
+    """Calculates utilization and metrics for a specific archived version."""
+    try:
+        # FIXED: Explicit database routing
+        snapshot = await db_manager.timetables.database["timetable_history"].find_one({"_id": ObjectId(version_id)})
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Version not found.")
+            
+        records = snapshot.get("data", [])
+        
+        valid_cohorts = set()
+        valid_rooms = set()
+        room_counts = {}
+        
+        for r in records:
+            cohort = r.get("cohort")
+            if cohort and str(cohort).upper() != "UNKNOWN":
+                valid_cohorts.add(cohort)
+                
+            room = r.get("allocation", {}).get("room_code")
+            if room and str(room).upper() not in ["ZOOM", "VIRTUAL", "NAN", "NONE", "", None, "TBA"]:
+                valid_rooms.add(room)
+                room_counts[room] = room_counts.get(room, 0) + 1
+
+        sorted_rooms = sorted([{"room": k, "classes": v} for k, v in room_counts.items()], key=lambda x: x["classes"], reverse=True)
+        
+        total_possible_slots = len(valid_rooms) * 20 if len(valid_rooms) > 0 else 1
+        physical_classes = sum(room_counts.values())
+        utilization_rate = min(round((physical_classes / total_possible_slots) * 100, 1), 100.0) if total_possible_slots > 0 else 0
+
+        return {
+            "version_name": snapshot.get("version_name"),
+            "total_classes": len(records),
+            "total_cohorts": len(valid_cohorts),
+            "total_rooms": len(valid_rooms),
+            "utilization_rate": utilization_rate,
+            "top_utilized_rooms": sorted_rooms
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import UploadTimetable from './pages/UploadTimetable';
 import ValidationReports from './pages/ValidationReports';
 import RoomManagement from './pages/RoomManagement';
+import VersionHistory from './pages/VersionHistory';
 
 // 1. ADDED: Import the new MasterTimetable component
 import MasterTimetable from './pages/MasterTimetable'; 
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="upload" element={<UploadTimetable />} />
           <Route path="reports" element={<ValidationReports />} />
           <Route path="rooms" element={<RoomManagement />} />
+          <Route path="history" element={<VersionHistory />} />
           
           {/* 2. UPDATED: Fixed path syntax for consistency */}
           <Route path="timetable" element={<MasterTimetable />} />
@@ -26,9 +28,7 @@ export default function App() {
           <Route path="users" element={
             <div className="p-8"><h2 className="text-2xl font-bold text-on-surface">User Management</h2><p className="mt-2 text-on-surface-variant">Admin tools coming soon.</p></div>
           } />
-          <Route path="history" element={
-            <div className="p-8"><h2 className="text-2xl font-bold text-on-surface">Version History</h2><p className="mt-2 text-on-surface-variant">Timetable archives coming soon.</p></div>
-          } />
+         
         </Route>
       </Routes>
     </BrowserRouter>
