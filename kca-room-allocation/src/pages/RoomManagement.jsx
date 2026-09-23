@@ -6,6 +6,7 @@ export default function RoomManagement() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  
 
   // Form state for adding new room manually
   const [formData, setFormData] = useState({
@@ -140,20 +141,72 @@ export default function RoomManagement() {
     r.room_code.toLowerCase().includes(search.toLowerCase())
   );
 
+const [bulkUploading, setBulkUploading] = useState(false);
+
+  const handleBulkUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formDataUpload = new FormData();
+    formDataUpload.append("file", file);
+
+    setBulkUploading(true);
+    try {
+      const res = await fetch("http://localhost:8000/api/rooms/bulk-upload", {
+        method: "POST",
+        body: formDataUpload,
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message);
+        fetchRooms(); // Refresh room listing
+      } else {
+        alert(data.detail || "Bulk upload failed.");
+      }
+    } catch (err) {
+      alert("Failed to upload rooms file.");
+    } finally {
+      setBulkUploading(false);
+      e.target.value = ""; // Reset input
+    }
+  };
+
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      {/* Header */}
+     {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Room Management</h1>
           <p className="text-sm text-gray-500">Configure lecture hall capacities and facility types.</p>
         </div>
-        <button
-          onClick={handleSyncRooms}
-          className="bg-purple-700 hover:bg-purple-800 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors shadow-sm"
-        >
-          Sync Missing Rooms from Database
-        </button>
+
+        <div className="flex gap-3 items-center">
+          {/* Hidden File Input */}
+          <input
+            type="file"
+            id="bulk-room-input"
+            accept=".csv, .xlsx"
+            className="hidden"
+            onChange={handleBulkUpload}
+          />
+          <label
+            htmlFor="bulk-room-input"
+            className={`cursor-pointer px-4 py-2 rounded-md text-sm font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 shadow-sm transition-colors ${
+              bulkUploading ? "opacity-50 pointer-events-none" : ""
+            }`}
+          >
+            {bulkUploading ? "Uploading..." : "Import CSV/Excel"}
+          </label>
+
+          <button
+            onClick={handleSyncRooms}
+            className="bg-purple-700 hover:bg-purple-800 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors shadow-sm"
+          >
+            Sync Missing Rooms from Database
+          </button>
+        </div>
       </div>
 
       {/* Add Room Card */}

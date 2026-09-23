@@ -5,6 +5,9 @@ import UploadTimetable from './pages/UploadTimetable';
 import ValidationReports from './pages/ValidationReports';
 import RoomManagement from './pages/RoomManagement';
 
+// 1. ADDED: Import the new MasterTimetable component
+import MasterTimetable from './pages/MasterTimetable'; 
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -15,6 +18,9 @@ export default function App() {
           <Route path="upload" element={<UploadTimetable />} />
           <Route path="reports" element={<ValidationReports />} />
           <Route path="rooms" element={<RoomManagement />} />
+          
+          {/* 2. UPDATED: Fixed path syntax for consistency */}
+          <Route path="timetable" element={<MasterTimetable />} />
           
           {/* Simple Placeholders for remaining links */}
           <Route path="users" element={
