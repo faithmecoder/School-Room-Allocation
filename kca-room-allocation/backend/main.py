@@ -705,3 +705,45 @@ async def export_timetable():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.get("/api/stats")
+async def get_dashboard_stats():
+    """Fetches live high-level metrics and room utilization analytics for all rooms."""
+    try:
+        total_classes = await db_manager.timetables.count_documents({})
+        cohorts = await db_manager.timetables.distinct("cohort")
+        rooms = await db_manager.timetables.distinct("allocation.room_code")
+        
+        valid_cohorts = [c for c in cohorts if c and str(c).upper() != "UNKNOWN"]
+        valid_rooms = [r for r in rooms if r and str(r).upper() not in ["ZOOM", "VIRTUAL", "NAN", "NONE"]]
+        
+        # Room Utilization Aggregation (Removed the $limit to get ALL rooms)
+        pipeline = [
+            {"$match": {"allocation.room_code": {"$nin": ["ZOOM", "VIRTUAL", "NAN", "NONE", "", None, "TBA"]}}},
+            {"$group": {"_id": "$allocation.room_code", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}}
+        ]
+        utilization_cursor = db_manager.timetables.aggregate(pipeline)
+        all_rooms = await utilization_cursor.to_list(length=None) # Set length=None to fetch all
+        
+        utilization_data = [{"room": r["_id"], "classes": r["count"]} for r in all_rooms]
+        
+        # Calculate overall physical utilization rate
+        total_possible_slots = len(valid_rooms) * 20 if len(valid_rooms) > 0 else 1
+        physical_classes = await db_manager.timetables.count_documents({
+            "allocation.room_code": {"$nin": ["ZOOM", "VIRTUAL", "NAN", "NONE", "", None, "TBA"]}
+        })
+        
+        utilization_rate = min(round((physical_classes / total_possible_slots) * 100, 1), 100.0) if total_possible_slots > 0 else 0
+
+        return {
+            "total_classes": total_classes,
+            "total_cohorts": len(valid_cohorts),
+            "total_rooms": len(valid_rooms),
+            "utilization_rate": utilization_rate,
+            "top_utilized_rooms": utilization_data # Now contains all rooms
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
