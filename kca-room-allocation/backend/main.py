@@ -946,3 +946,83 @@ async def get_version_stats(version_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+class RoomModel(BaseModel):
+    room_code: str
+    room_type: str
+    capacity: int
+
+@app.get("/api/rooms")
+async def get_all_rooms():
+    """Fetches all managed rooms from the database."""
+    try:
+        cursor = db_manager.db["rooms"].find({}).sort("room_code", 1)
+        rooms = await cursor.to_list(length=None)
+        
+        formatted_rooms = []
+        for r in rooms:
+            formatted_rooms.append({
+                "id": str(r["_id"]),
+                "room_code": r.get("room_code", ""),
+                "room_type": r.get("room_type", ""),
+                "capacity": r.get("capacity", 0)
+            })
+        return formatted_rooms
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/rooms")
+async def add_new_room(room: RoomModel):
+    """Adds a new lecture hall or lab to the system."""
+    try:
+        # Check for duplicates
+        existing = await db_manager.db["rooms"].find_one({"room_code": room.room_code.strip().upper()})
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Room {room.room_code} already exists.")
+            
+        new_room = {
+            "room_code": room.room_code.strip().upper(),
+            "room_type": room.room_type.strip().upper(),
+            "capacity": room.capacity
+        }
+        
+        await db_manager.db["rooms"].insert_one(new_room)
+        return {"message": f"Successfully added {room.room_code}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/rooms/{room_id}")
+async def delete_room(room_id: str):
+    """Removes a room from the system."""
+    try:
+        result = await db_manager.db["rooms"].delete_one({"_id": ObjectId(room_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Room not found.")
+        return {"message": "Room successfully deleted."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/rooms/{room_id}")
+async def update_room(room_id: str, room: RoomModel):
+    """Updates the capacity or type of an existing room."""
+    try:
+        update_data = {
+            "room_code": room.room_code.strip().upper(),
+            "room_type": room.room_type.strip().upper(),
+            "capacity": room.capacity
+        }
+        result = await db_manager.db["rooms"].update_one(
+            {"_id": ObjectId(room_id)},
+            {"$set": update_data}
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Room not found.")
+        return {"message": "Room successfully updated."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
