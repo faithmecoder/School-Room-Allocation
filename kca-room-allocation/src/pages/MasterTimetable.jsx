@@ -6,18 +6,15 @@ export default function MasterTimetable() {
   const [filters, setFilters] = useState({ cohorts: [], rooms: [] });
   const [loading, setLoading] = useState(false);
   
-  // Search states
   const [selectedCohort, setSelectedCohort] = useState('');
   const [selectedRoom, setSelectedRoom] = useState('');
 
-  // Fetch dropdown options on load
   useEffect(() => {
     axios.get('http://localhost:8000/api/filters')
       .then(res => setFilters(res.data))
       .catch(err => console.error("Failed to load filters", err));
   }, []);
 
-  // Fetch schedule whenever a filter changes
   useEffect(() => {
     setLoading(true);
     let url = 'http://localhost:8000/api/timetable?';
@@ -37,13 +34,27 @@ export default function MasterTimetable() {
 
   return (
     <div className="animate-fade-in p-6 max-w-7xl mx-auto">
-      <div className="mb-8">
-        <h2 className="text-[32px] font-bold text-gray-800 mb-2 tracking-tight">Master Timetable Explorer</h2>
-        <p className="text-gray-600 text-[16px]">Search and view the resolved schedule by specific cohort or lecture facility.</p>
+      
+      {/* Header with Green Export Button */}
+      <div className="mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
+        <div>
+          <h2 className="text-[32px] font-bold text-gray-800 mb-2 tracking-tight">Master Timetable Explorer</h2>
+          <p className="text-gray-600 text-[16px]">Search and view the resolved schedule by specific cohort or lecture facility.</p>
+        </div>
+        
+        <a 
+          href="http://localhost:8000/api/export" 
+          className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-lg bg-[#15803d] text-white hover:bg-[#166534] transition-colors shadow-sm whitespace-nowrap w-fit"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+          </svg>
+          Export Resolved Timetable
+        </a>
       </div>
 
       {/* Search & Filter Bar */}
-      <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 mb-6 flex gap-6">
+      <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-col md:flex-row gap-6">
         <div className="flex-1">
           <label className="block text-xs font-bold text-gray-600 uppercase mb-2">Filter by Cohort</label>
           <select
@@ -51,7 +62,7 @@ export default function MasterTimetable() {
             value={selectedCohort}
             onChange={(e) => {
               setSelectedCohort(e.target.value);
-              setSelectedRoom(''); // Clear room filter when cohort is selected
+              setSelectedRoom(''); 
             }}
           >
             <option value="">-- All Cohorts --</option>
@@ -61,7 +72,7 @@ export default function MasterTimetable() {
           </select>
         </div>
 
-        <div className="flex flex-col justify-center px-4">
+        <div className="flex flex-col justify-center px-2 md:px-4 hidden md:flex">
           <span className="text-gray-400 font-bold text-sm">OR</span>
         </div>
 
@@ -72,7 +83,7 @@ export default function MasterTimetable() {
             value={selectedRoom}
             onChange={(e) => {
               setSelectedRoom(e.target.value);
-              setSelectedCohort(''); // Clear cohort filter when room is selected
+              setSelectedCohort(''); 
             }}
           >
             <option value="">-- All Rooms --</option>
@@ -85,7 +96,7 @@ export default function MasterTimetable() {
         <div className="flex items-end">
           <button 
             onClick={() => { setSelectedCohort(''); setSelectedRoom(''); }}
-            className="px-4 py-2 text-sm font-semibold rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+            className="w-full md:w-auto px-4 py-2 text-sm font-semibold rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
           >
             Clear Filters
           </button>
@@ -107,27 +118,17 @@ export default function MasterTimetable() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
-                <tr>
-                  <td colSpan="5" className="px-6 py-8 text-center text-gray-500">Loading schedule...</td>
-                </tr>
+                <tr><td colSpan="5" className="px-6 py-8 text-center text-gray-500">Loading schedule...</td></tr>
               ) : schedule.length === 0 ? (
-                <tr>
-                  <td colSpan="5" className="px-6 py-8 text-center text-gray-500 italic">No classes found for this selection.</td>
-                </tr>
+                <tr><td colSpan="5" className="px-6 py-8 text-center text-gray-500 italic">No classes found for this selection.</td></tr>
               ) : (
                 schedule.map((item) => (
                   <tr key={item.id} className="hover:bg-blue-50/50 transition-colors">
                     <td className="px-5 py-3.5 text-[14px] font-semibold text-gray-800 whitespace-nowrap">{item.day}</td>
                     <td className="px-5 py-3.5 text-[14px] font-medium text-gray-600 whitespace-nowrap">{item.time_slot}</td>
                     <td className="px-5 py-3.5 text-[13px] font-bold text-blue-800 bg-blue-50/30 whitespace-nowrap">{item.cohort}</td>
-                    <td className="px-5 py-3.5 text-[13px] text-gray-700">
-                      <span className="font-bold mr-2">{item.unit_code}</span>
-                      {item.unit_name}
-                    </td>
-                    <td className="px-5 py-3.5 text-[14px] font-bold text-gray-800 whitespace-nowrap">
-                      {item.room}
-                      <span className="block text-[11px] font-normal text-gray-500 mt-0.5">{item.room_type}</span>
-                    </td>
+                    <td className="px-5 py-3.5 text-[13px] text-gray-700"><span className="font-bold mr-2">{item.unit_code}</span>{item.unit_name}</td>
+                    <td className="px-5 py-3.5 text-[14px] font-bold text-gray-800 whitespace-nowrap">{item.room}<span className="block text-[11px] font-normal text-gray-500 mt-0.5">{item.room_type}</span></td>
                   </tr>
                 ))
               )}

@@ -1026,3 +1026,63 @@ async def update_room(room_id: str, room: RoomModel):
         return {"message": "Room successfully updated."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class UserModel(BaseModel):
+    full_name: str
+    email: str
+    role: str  # 'TIMETABLE_OFFICER' or 'CLASS_REP'
+    cohort: str = "" # e.g., 'BSD FT 3.1' (Only needed for class reps)
+
+@app.get("/api/users")
+async def get_all_users():
+    """Fetches all system users."""
+    try:
+        cursor = db_manager.db["users"].find({}).sort("role", 1)
+        users = await cursor.to_list(length=None)
+        
+        formatted_users = []
+        for u in users:
+            formatted_users.append({
+                "id": str(u["_id"]),
+                "full_name": u.get("full_name", ""),
+                "email": u.get("email", ""),
+                "role": u.get("role", ""),
+                "cohort": u.get("cohort", "")
+            })
+        return formatted_users
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/users")
+async def add_new_user(user: UserModel):
+    """Registers a new Timetable Officer or Class Rep."""
+    try:
+        existing = await db_manager.db["users"].find_one({"email": user.email.strip().lower()})
+        if existing:
+            raise HTTPException(status_code=400, detail="User with this email already exists.")
+            
+        new_user = {
+            "full_name": user.full_name.strip(),
+            "email": user.email.strip().lower(),
+            "role": user.role,
+            "cohort": user.cohort.strip().upper() if user.role == "CLASS_REP" else "ALL"
+        }
+        
+        await db_manager.db["users"].insert_one(new_user)
+        return {"message": "User successfully created"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: str):
+    """Removes a user account."""
+    try:
+        result = await db_manager.db["users"].delete_one({"_id": ObjectId(user_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="User not found.")
+        return {"message": "User deleted."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

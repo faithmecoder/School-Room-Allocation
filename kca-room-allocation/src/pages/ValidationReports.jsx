@@ -73,32 +73,27 @@ export default function ValidationReports() {
     }
   };
 
-  return (
+return (
     <div className="animate-fade-in p-6 max-w-7xl mx-auto">
-      <div className="mb-8 flex justify-between items-end">
+      
+      {/* Updated Header with Green Export Button */}
+      <div className="mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
         <div>
-          <h2 className="text-[32px] font-bold text-on-surface mb-2 tracking-tight">Validation Reports</h2>
-          <p className="text-on-surface-variant text-[16px]">Automated conflict detection pulled directly from your master timetable.</p>
+          <h2 className="text-[32px] font-bold text-gray-800 mb-2 tracking-tight">Validation Reports</h2>
+          <p className="text-gray-600 text-[16px]">Review and resolve room capacity clashes and double-bookings.</p>
         </div>
-        <div className="flex gap-3">
-          <button
-            onClick={fetchConflicts}
-            className="px-4 py-2 text-[13px] font-semibold rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-          >
-            Refresh Scan
-          </button>
-          
-          <button
-            onClick={() => window.open('http://localhost:8000/api/export', '_blank')}
-            className="px-4 py-2 text-[13px] font-semibold rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors shadow-sm flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Export Resolved Timetable
-          </button>
-        </div>
+        
+        <a 
+          href="http://localhost:8000/api/export" 
+          className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-lg bg-[#15803d] text-white hover:bg-[#166534] transition-colors shadow-sm whitespace-nowrap w-fit"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+          </svg>
+          Export Resolved Timetable
+        </a>
       </div>
+
 
       <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(15,76,129,0.05)] border border-outline-variant/20 overflow-hidden">
         <div className="overflow-x-auto">

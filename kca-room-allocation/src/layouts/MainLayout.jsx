@@ -1,121 +1,104 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
+import { Outlet, Link, useLocation } from 'react-router-dom';
 
 export default function MainLayout() {
   const location = useLocation();
-  // State to control the mobile menu
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const navItems = [
-    { name: 'Dashboard', path: '/', icon: 'dashboard' },
-    { name: 'Upload Timetable', path: '/upload', icon: 'upload_file' },
-    { name: 'Validation Reports', path: '/reports', icon: 'assessment' },
-    { name: 'Room Management', path: '/rooms', icon: 'meeting_room' },
-    { name: 'User Management', path: '/users', icon: 'group' },
-    { name: 'Version History', path: '/history', icon: 'history' },
+  const navLinks = [
+    { name: 'Master Timetable', path: '/timetable', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+    { name: 'Upload Data', path: '/upload', icon: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12' },
+    { name: 'Validation Reports', path: '/reports', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
+    { name: 'Facilities', path: '/rooms', icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4' },
+    { name: 'User Management', path: '/users', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
+    { name: 'Version History', path: '/history', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
   ];
 
-  // Helper to close the menu when a link is clicked on mobile
-  const handleLinkClick = () => {
-    setIsMobileMenuOpen(false);
-  };
-
   return (
-    <div className="bg-background text-on-surface font-body-lg min-h-screen antialiased flex overflow-hidden">
+    <div className="min-h-screen bg-gray-50/50 font-sans">
       
-      {/* Mobile Dark Overlay */}
+      {/* Mobile Top Navigation Bar */}
+      <div className="md:hidden bg-white border-b border-gray-200 px-4 py-3 flex items-center sticky top-0 z-30 shadow-sm">
+        <button 
+          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          className="p-2 -ml-2 mr-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors focus:outline-none"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            {isMobileMenuOpen ? (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+            ) : (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+            )}
+          </svg>
+        </button>
+        <Link 
+          to="/" 
+          onClick={() => setIsMobileMenuOpen(false)}
+          className="text-lg font-extrabold text-blue-900 tracking-tight hover:text-blue-700 transition-colors"
+        >
+          Room Allocation System
+        </Link>
+      </div>
+
+      {/* Mobile Background Overlay */}
       {isMobileMenuOpen && (
         <div 
-          className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm transition-opacity"
+          className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-40 md:hidden transition-opacity"
           onClick={() => setIsMobileMenuOpen(false)}
-        />
+        ></div>
       )}
 
-      {/* SideNavBar - Now responsive with slide-in animation */}
-      <nav className={`fixed left-0 top-0 h-full w-[260px] bg-surface-container-lowest shadow-[0_4px_20px_rgba(15,76,129,0.05)] flex flex-col py-stack-lg z-30 transition-transform duration-300 ease-in-out ${
-        isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
-      } md:translate-x-0`}>
-        <div className="px-gutter mb-8 flex flex-col gap-2">
-          <h1 className="font-title-md text-[20px] font-bold text-primary">KCA University</h1>
-          <p className="font-body-sm text-[14px] text-on-surface-variant">Room Allocation System</p>
-        </div>
+      {/* Sidebar (Fixed on Desktop, Slide-out on Mobile) */}
+      <aside className={`fixed inset-y-0 left-0 w-72 bg-white border-r border-gray-200 z-50 transform transition-transform duration-300 ease-in-out shadow-xl md:shadow-none md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         
-        <div className="px-gutter mb-8">
-          <button className="w-full bg-primary text-on-primary py-3 px-4 rounded-lg font-label-md text-[14px] hover:bg-opacity-90 transition-colors duration-200 shadow-sm flex items-center justify-center gap-2">
-            <span className="material-symbols-outlined text-[18px]">add</span>
-            New Allocation
-          </button>
-        </div>
-
-        <ul className="flex flex-col gap-1 flex-grow overflow-y-auto w-full px-4">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <li key={item.name}>
-                <Link
-                  to={item.path}
-                  onClick={handleLinkClick}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors duration-200 ${
-                    isActive 
-                      ? 'bg-primary/10 text-primary font-bold' 
-                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high'
-                  }`}
-                >
-                  <span className="material-symbols-outlined">{item.icon}</span>
-                  <span className="font-body-lg text-[15px]">{item.name}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-
-        <div className="mt-auto flex flex-col gap-1 w-full pt-4 border-t border-outline-variant/10 px-4">
-          <Link to="#" className="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:text-primary hover:bg-surface-container-high rounded-lg transition-colors duration-200">
-            <span className="material-symbols-outlined">settings</span>
-            <span className="font-body-lg text-[15px]">Settings</span>
+        {/* Sidebar Header / Branding */}
+        <div className="h-20 hidden md:flex items-center px-8 border-b border-gray-100">
+          <Link to="/" className="text-xl font-extrabold text-blue-900 tracking-tight hover:text-blue-700 transition-colors w-full block">
+            Room Allocation System
           </Link>
         </div>
-      </nav>
 
-      {/* Main Content Wrapper */}
-      <div className="flex-grow flex flex-col md:ml-[260px] min-h-screen w-full relative overflow-y-auto">
-        
-        {/* TopAppBar - Added Hamburger Menu for Mobile */}
-        <header className="fixed top-0 right-0 left-0 md:left-[260px] h-16 bg-surface-container-lowest/90 backdrop-blur-md border-b border-outline-variant/20 flex justify-between items-center px-4 md:px-8 w-full md:w-[calc(100%-260px)] z-10">
+        {/* Navigation Links */}
+        <nav className="p-4 space-y-1.5 overflow-y-auto h-[calc(100vh-5rem)]">
+          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 px-4 mt-2">Menu</div>
           
-          {/* Mobile Menu Button */}
-          <div className="flex items-center gap-3 md:hidden">
-            <button 
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="text-on-surface-variant hover:bg-surface-container-high p-2 rounded-lg transition-colors flex items-center justify-center"
-            >
-              <span className="material-symbols-outlined text-[24px]">menu</span>
-            </button>
-            <span className="font-title-md text-[18px] font-bold text-primary">RAS</span>
-          </div>
-          
-          <div className="flex items-center gap-4 ml-auto">
-            <button className="text-on-surface-variant hover:bg-surface-container-high/50 rounded-full p-2 transition-all">
-              <span className="material-symbols-outlined">notifications</span>
-            </button>
-            <div className="h-8 w-[1px] bg-outline-variant/30 mx-2 hidden sm:block"></div>
-            <div className="flex items-center gap-3 cursor-pointer group">
-              <div className="w-9 h-9 rounded-full bg-primary-container text-on-primary flex items-center justify-center font-bold text-[14px] shadow-sm group-hover:bg-primary transition-colors">
-                FN
-              </div>
-              <div className="flex-col hidden sm:flex">
-                <span className="text-[14px] font-bold text-on-surface">softwareDevQueen</span>
-                <span className="text-[12px] text-primary hover:underline">Logout</span>
-              </div>
-            </div>
-          </div>
-        </header>
+          {navLinks.map((link) => {
+            const isActive = location.pathname === link.path;
+            return (
+              <Link
+                key={link.name}
+                to={link.path}
+                onClick={() => setIsMobileMenuOpen(false)}
+                className={`flex items-center px-4 py-3.5 rounded-xl text-sm font-semibold transition-all duration-200 group ${
+                  isActive 
+                    ? 'bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-100/50' 
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                }`}
+              >
+                <div className={`mr-4 p-1.5 rounded-lg transition-colors ${isActive ? 'bg-blue-100/50 text-blue-600' : 'bg-transparent text-gray-400 group-hover:text-gray-600'}`}>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={link.icon}></path>
+                  </svg>
+                </div>
+                {link.name}
+                
+                {/* Active Indicator Dot */}
+                {isActive && (
+                  <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-600"></div>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+      </aside>
 
-        {/* Canvas - Adjusted padding for mobile */}
-        <main className="flex-grow p-4 md:p-8 mt-16 max-w-container-max mx-auto w-full flex flex-col">
+      {/* Main Content Area */}
+      <main className="md:ml-72 flex flex-col min-h-screen">
+        <div className="flex-1 w-full max-w-full">
           <Outlet />
-        </main>
-      </div>
+        </div>
+      </main>
+      
     </div>
   );
 }
