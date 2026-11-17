@@ -1086,3 +1086,56 @@ async def delete_user(user_id: str):
         return {"message": "User deleted."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/filters")
+async def get_timetable_filters():
+    """Fetches unique cohorts and rooms for the frontend dropdowns."""
+    try:
+        cohorts = await db_manager.timetables.distinct("cohort")
+        rooms = await db_manager.timetables.distinct("allocation.room_code")
+        
+        # Filter out invalid or empty entries and sort them
+        valid_cohorts = sorted([c for c in cohorts if c and str(c).upper() != "UNKNOWN"])
+        valid_rooms = sorted([r for r in rooms if r and str(r).upper() not in ["ZOOM", "VIRTUAL", "NAN", "NONE", "", "TBA"]])
+        
+        return {
+            "cohorts": valid_cohorts,
+            "rooms": valid_rooms
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/timetable")
+async def get_master_timetable(cohort: Optional[str] = None, room: Optional[str] = None):
+    """Fetches the resolved schedule, optionally filtered by cohort or room."""
+    try:
+        query = {}
+        if cohort:
+            query["cohort"] = cohort
+        if room:
+            query["allocation.room_code"] = room
+
+        # Fetch records sorted by day and time
+        cursor = db_manager.timetables.find(query).sort([
+            ("schedule.day_no", 1), 
+            ("schedule.time_slot", 1)
+        ])
+        records = await cursor.to_list(length=None)
+
+        formatted_schedule = []
+        for r in records:
+            formatted_schedule.append({
+                "id": str(r["_id"]),
+                "day": str(r.get("schedule", {}).get("day", "")).capitalize(),
+                "time_slot": r.get("schedule", {}).get("time_slot", ""),
+                "cohort": r.get("cohort", "UNKNOWN"),
+                "unit_code": r.get("unit_code", ""),
+                "unit_name": r.get("unit_name", ""),
+                "room": r.get("allocation", {}).get("room_code", "TBA"),
+                "room_type": r.get("allocation", {}).get("room_type", "UNKNOWN")
+            })
+        
+        return formatted_schedule
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
