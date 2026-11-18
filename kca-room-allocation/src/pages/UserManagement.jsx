@@ -5,7 +5,8 @@ export default function UserManagement() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  const [formData, setFormData] = useState({ full_name: '', email: '', role: 'CLASS_REP', cohort: '' });
+  // Added password to the state
+  const [formData, setFormData] = useState({ full_name: '', email: '', role: 'CLASS_REP', cohort: '', password: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fetchUsers = () => {
@@ -30,7 +31,8 @@ export default function UserManagement() {
     setIsSubmitting(true);
     try {
       await axios.post('http://localhost:8000/api/users', formData);
-      setFormData({ full_name: '', email: '', role: 'CLASS_REP', cohort: '' });
+      // Reset form including password
+      setFormData({ full_name: '', email: '', role: 'CLASS_REP', cohort: '', password: '' });
       fetchUsers();
     } catch (err) {
       alert(err.response?.data?.detail || "An error occurred adding the user.");
@@ -79,6 +81,7 @@ export default function UserManagement() {
                 <label className="block text-xs font-bold text-gray-600 uppercase mb-2">Role</label>
                 <select className="w-full border border-gray-300 rounded-md px-4 py-2 text-sm" value={formData.role} onChange={e => setFormData({...formData, role: e.target.value})}>
                   <option value="CLASS_REP">Class Representative</option>
+                  <option value="LECTURER">Lecturer</option>
                   <option value="TIMETABLE_OFFICER">Timetable Officer (Admin)</option>
                 </select>
               </div>
@@ -90,7 +93,13 @@ export default function UserManagement() {
                 </div>
               )}
 
-              <button type="submit" disabled={isSubmitting} className="w-full mt-2 px-4 py-2 text-sm font-semibold rounded-md bg-blue-600 text-white hover:bg-blue-700">
+              {/* Initial Password Field */}
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-2">Initial Password</label>
+                <input type="text" placeholder="e.g. TempPass123" className="w-full border border-gray-300 rounded-md px-4 py-2 text-sm" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} required />
+              </div>
+
+              <button type="submit" disabled={isSubmitting} className="w-full mt-4 px-4 py-2 text-sm font-semibold rounded-md bg-blue-600 text-white hover:bg-blue-700">
                 {isSubmitting ? 'Creating Account...' : 'Create Account'}
               </button>
             </form>
@@ -131,7 +140,7 @@ export default function UserManagement() {
                           }`}>
                             {user.role.replace('_', ' ')}
                           </span>
-                          {user.cohort !== 'ALL' && <div className="text-[12px] font-semibold text-gray-600 mt-1 mt-1">Cohort: {user.cohort}</div>}
+                          {user.cohort !== 'ALL' && <div className="text-[12px] font-semibold text-gray-600 mt-1">Cohort: {user.cohort}</div>}
                         </td>
                         <td className="px-6 py-4 text-right">
                           <button onClick={() => handleDelete(user.id, user.full_name)} className="text-red-500 hover:text-red-700 text-sm font-semibold">Revoke Access</button>

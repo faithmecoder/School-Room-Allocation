@@ -59,7 +59,7 @@ export default function MainLayout() {
         </div>
 
         {/* Navigation Links */}
-        <nav className="p-4 space-y-1.5 overflow-y-auto h-[calc(100vh-5rem)]">
+        <nav className="p-4 space-y-1.5 overflow-y-auto h-[calc(100vh-5rem)] flex flex-col">
           <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 px-4 mt-2">Menu</div>
           
           {navLinks.map((link) => {
@@ -89,6 +89,16 @@ export default function MainLayout() {
               </Link>
             );
           })}
+
+          {/* Logout Button at the bottom of the sidebar */}
+          <div className="mt-auto pt-8">
+            <button 
+              onClick={() => { localStorage.removeItem('user'); window.location.href = '/login'; }} 
+              className="flex justify-center items-center px-4 py-3.5 rounded-xl text-sm font-semibold text-red-600 hover:bg-red-50 w-full transition-colors"
+            >
+              Log Out
+            </button>
+          </div>
         </nav>
       </aside>
 

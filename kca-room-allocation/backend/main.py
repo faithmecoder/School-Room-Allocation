@@ -14,6 +14,7 @@ from datetime import datetime
 from pydantic import BaseModel
 import xlsxwriter
 from bson import ObjectId
+import hashlib
 
 
 app = FastAPI(title="Room Allocation System API")
@@ -1028,11 +1029,45 @@ async def update_room(room_id: str, room: RoomModel):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+import hashlib
+
+def hash_password(password: str):
+    """Hashes passwords securely using SHA-256 for the database."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
 class UserModel(BaseModel):
     full_name: str
     email: str
-    role: str  # 'TIMETABLE_OFFICER' or 'CLASS_REP'
-    cohort: str = "" # e.g., 'BSD FT 3.1' (Only needed for class reps)
+    role: str  # 'TIMETABLE_OFFICER', 'CLASS_REP', or 'LECTURER'
+    cohort: str = "" 
+    password: str  # NEW: Added password field
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+@app.post("/api/auth/login")
+async def login_user(credentials: LoginRequest):
+    """Authenticates a user and returns their role and cohort."""
+    try:
+        user = await db_manager.db["users"].find_one({"email": credentials.email.strip().lower()})
+        
+        # Verify user exists and hashed passwords match
+        if not user or user.get("password") != hash_password(credentials.password):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        return {
+            "id": str(user["_id"]),
+            "full_name": user["full_name"],
+            "role": user["role"],
+            "email": user["email"],
+            "cohort": user.get("cohort", "ALL")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/users")
 async def get_all_users():
@@ -1056,7 +1091,7 @@ async def get_all_users():
 
 @app.post("/api/users")
 async def add_new_user(user: UserModel):
-    """Registers a new Timetable Officer or Class Rep."""
+    """Registers a new user with an encrypted password."""
     try:
         existing = await db_manager.db["users"].find_one({"email": user.email.strip().lower()})
         if existing:
@@ -1066,7 +1101,8 @@ async def add_new_user(user: UserModel):
             "full_name": user.full_name.strip(),
             "email": user.email.strip().lower(),
             "role": user.role,
-            "cohort": user.cohort.strip().upper() if user.role == "CLASS_REP" else "ALL"
+            "cohort": user.cohort.strip().upper() if user.role == "CLASS_REP" else "ALL",
+            "password": hash_password(user.password) # Encrypt before saving
         }
         
         await db_manager.db["users"].insert_one(new_user)
@@ -1078,7 +1114,6 @@ async def add_new_user(user: UserModel):
 
 @app.delete("/api/users/{user_id}")
 async def delete_user(user_id: str):
-    """Removes a user account."""
     try:
         result = await db_manager.db["users"].delete_one({"_id": ObjectId(user_id)})
         if result.deleted_count == 0:
@@ -1086,6 +1121,7 @@ async def delete_user(user_id: str):
         return {"message": "User deleted."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.get("/api/filters")
@@ -1139,3 +1175,26 @@ async def get_master_timetable(cohort: Optional[str] = None, room: Optional[str]
         return formatted_schedule
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/setup-admin")
+async def setup_first_admin():
+    """Temporary endpoint to create the first Super Admin account."""
+    try:
+        # Check if our admin already exists
+        existing = await db_manager.db["users"].find_one({"email": "admin@kca.ac.ke"})
+        if existing:
+            return {"message": "Admin already exists! Go to /login"}
+            
+        # Create the new admin with a hashed password
+        new_admin = {
+            "full_name": "System Administrator",
+            "email": "admin@kca.ac.ke",
+            "role": "TIMETABLE_OFFICER",
+            "cohort": "ALL",
+            "password": hash_password("KCAAdmin") 
+        }
+        
+        await db_manager.db["users"].insert_one(new_admin)
+        return {"message": "Success! You can now log in with email: admin@kca.ac.ke | password: Admin123!"}
+    except Exception as e:
+        return {"error": str(e)}

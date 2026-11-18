@@ -49,9 +49,19 @@ export default function StudentPortal() {
       
       {/* Mobile-Friendly Blue Header */}
       <div className="bg-blue-800 text-white px-6 py-8 shadow-md rounded-b-3xl mb-8">
-        <div className="max-w-3xl mx-auto">
-          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-2">Class Rep & Lecturer Portal</h1>
-          <p className="text-blue-200 text-sm md:text-base">Check your live, conflict-free weekly schedule.</p>
+        <div className="max-w-3xl mx-auto flex justify-between items-start">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-2">Class Rep & Lecturer Portal</h1>
+            <p className="text-blue-200 text-sm md:text-base">Check your live, conflict-free weekly schedule.</p>
+          </div>
+          
+          {/* Logout Button*/}
+          <button 
+            onClick={() => { localStorage.removeItem('user'); window.location.href = '/login'; }} 
+            className="text-white text-sm font-semibold underline mt-2 hover:text-blue-200 transition-colors"
+          >
+            Log Out
+          </button>
         </div>
       </div>
 
