@@ -16,6 +16,9 @@ import xlsxwriter
 from bson import ObjectId
 import hashlib
 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 app = FastAPI(title="Room Allocation System API")
 app.include_router(rooms.router)
@@ -1198,3 +1201,54 @@ async def setup_first_admin():
         return {"message": "Success! You can now log in with email: admin@kca.ac.ke | password: Admin123!"}
     except Exception as e:
         return {"error": str(e)}
+
+
+class BroadcastRequest(BaseModel):
+    subject: str
+    message: str
+
+@app.post("/api/broadcast")
+async def broadcast_to_reps(payload: BroadcastRequest):
+    """Fetches all Class Reps from MongoDB and sends them an email update."""
+    try:
+        # 1. Fetch all Class Reps from the database
+        cursor = db_manager.db["users"].find({"role": "CLASS_REP"})
+        reps = await cursor.to_list(length=None)
+        
+        if not reps:
+            raise HTTPException(status_code=404, detail="No Class Reps found in the system.")
+
+        # 2. Configure your sender email (You will need a Gmail App Password)
+        sender_email = "faithndiangui12@gmail.com"  # actual Gmail
+        sender_password = "mbay sxhq blmj ebzf" # See instructions below
+        
+        # 3. Connect to Gmail's SMTP Server
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        
+        success_count = 0
+        
+        # 4. Loop through each rep and send a personalized email
+        for rep in reps:
+            msg = MIMEMultipart()
+            msg['From'] = f"KCA Timetable System <{sender_email}>"
+            msg['To'] = rep["email"]
+            msg['Subject'] = payload.subject
+            
+            # Personalize the email body
+            full_message = f"Hello {rep.get('full_name', 'Student')},\n\n"
+            full_message += f"{payload.message}\n\n"
+            full_message += f"Your assigned cohort: {rep.get('cohort', 'Unknown')}\n"
+            full_message += "View your live schedule here: http://localhost:5173/portal\n\n"
+            full_message += "Regards,\nTimetable Administration"
+            
+            msg.attach(MIMEText(full_message, 'plain'))
+            server.send_message(msg)
+            success_count += 1
+            
+        server.quit()
+        return {"status": "success", "message": f"Successfully emailed {success_count} Class Reps."}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,140 +1,181 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import axios from 'axios';
 
 export default function UploadTimetable() {
-  const [isDragActive, setIsDragActive] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadMessage, setUploadMessage] = useState(null);
-  const fileInputRef = useRef(null);
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [error, setError] = useState(null);
 
-  const processUpload = async (file) => {
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setFile(e.target.files[0]);
+      setMessage(null);
+      setError(null);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!file) {
+      setError("Please select a file first.");
+      return;
+    }
+    
     if (!file.name.endsWith('.xlsx')) {
-      setUploadMessage({ type: 'error', text: 'Strictly accepts .xlsx files only.' });
+      setError("Invalid file type. Please upload a .xlsx Excel file.");
       return;
     }
 
-    setIsUploading(true);
-    setUploadMessage(null);
+    setUploading(true);
+    setError(null);
+    setMessage(null);
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      // Send the file to the FastAPI backend
       const response = await axios.post('http://localhost:8000/api/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
+      setMessage(response.data.message);
+      setFile(null); // Clear file after success
       
-      setUploadMessage({ type: 'success', text: response.data.message });
-    } catch (error) {
-      const errorText = error.response?.data?.detail || 'An error occurred during upload.';
-      setUploadMessage({ type: 'error', text: errorText });
+      // Reset the file input visually
+      document.getElementById('file-upload').value = '';
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to process the file. Check your formatting.");
     } finally {
-      setIsUploading(false);
-    }
-  };
-
-  // Drag and Drop Handlers
-  const handleDrag = (e) => { e.preventDefault(); e.stopPropagation(); };
-  const handleDragIn = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragActive(true); };
-  const handleDragOut = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragActive(false); };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragActive(false);
-    
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      processUpload(e.dataTransfer.files[0]);
-    }
-  };
-
-  // Button Click Handler
-  const handleBrowseClick = () => fileInputRef.current.click();
-
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      processUpload(e.target.files[0]);
-      // Reset the input value so the same file can be uploaded again if needed
-      e.target.value = null; 
+      setUploading(false);
     }
   };
 
   return (
-    <>
+    <div className="animate-fade-in max-w-7xl mx-auto">
+      
+      {/* Header */}
       <div className="mb-8">
-        <h2 className="font-headline-lg-mobile md:font-headline-lg text-[32px] font-semibold text-on-surface mb-2">Upload Timetable</h2>
-        <p className="text-on-surface-variant font-body-lg text-[16px]">Upload your master schedule to begin the allocation process.</p>
+        <h2 className="text-[32px] font-bold text-[#1f4153] mb-2 tracking-tight">Upload Data</h2>
+        <p className="text-gray-500 text-[16px]">Import your draft timetable from Excel to automatically detect conflicts.</p>
       </div>
 
-      <div className="flex-grow flex flex-col items-center justify-center">
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          onChange={handleFileChange} 
-          accept=".xlsx" 
-          className="hidden" 
-        />
-
-        <div 
-          className={`w-full max-w-3xl bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(15,76,129,0.05)] border-2 border-dashed p-12 md:p-20 text-center transition-all duration-300 ease-in-out relative group cursor-pointer overflow-hidden ${
-            isDragActive ? 'border-primary bg-blue-50' : 'border-primary/30 hover:border-primary/50'
-          } ${isUploading ? 'opacity-75 pointer-events-none' : ''}`}
-          onDragEnter={handleDragIn}
-          onDragLeave={handleDragOut}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-          onClick={handleBrowseClick}
-        >
-          <div className="pointer-events-none relative z-10 flex flex-col items-center gap-6 transition-transform duration-300 group-hover:-translate-y-2">
-            <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-colors duration-300 ${
-              isDragActive ? 'bg-primary/10' : 'bg-surface-container-low group-hover:bg-primary-container/10'
-            }`}>
-              {isUploading ? (
-                <span className="material-symbols-outlined text-[40px] text-primary animate-spin">sync</span>
-              ) : (
-                <span className={`material-symbols-outlined text-[40px] transition-colors duration-300 ${
-                  isDragActive ? 'text-secondary-container scale-110' : 'text-primary group-hover:text-secondary-container'
-                }`} style={{ fontVariationSettings: "'FILL' 1" }}>
-                  cloud_upload
-                </span>
-              )}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        
+        {/* Formatting Guide (Moved to be First) */}
+        <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 h-full">
+          <div className="flex items-center gap-3 mb-6 border-b border-gray-100 pb-4">
+            <div className="w-10 h-10 rounded-lg bg-[#eaf1f5] flex items-center justify-center text-[#1f4153]">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
             </div>
-            
+            <h3 className="text-lg font-bold text-[#1f4153]">Excel Formatting Guide</h3>
+          </div>
+
+          <div className="space-y-6 text-sm text-gray-600">
+            <p>To ensure the conflict engine reads your data correctly, your Excel file must follow the standard KCA template structure.</p>
+
             <div>
-              <h3 className="font-title-md text-[20px] font-semibold text-on-surface mb-2">
-                {isUploading ? 'Processing File...' : 'Drag and drop your file here'}
-              </h3>
-              <p className="font-body-sm text-[14px] text-on-surface-variant mb-6">
-                {isUploading ? 'Parsing rows and updating database' : 'Or click to browse from your computer'}
-              </p>
+              <h4 className="font-bold text-gray-800 mb-2">1. Cohort Headers</h4>
+              <p>Each group of classes must be preceded by a row containing the Cohort Name (e.g., <span className="bg-gray-100 text-gray-800 font-mono px-1.5 py-0.5 rounded text-xs">BSD FT 3.1</span>) strictly in the <strong>first column (Column A)</strong>.</p>
             </div>
 
-            {!isUploading && (
-              <div className="flex flex-col items-center gap-4">
-                <button 
-                  className="bg-primary text-on-primary font-label-md text-[14px] px-6 py-3 rounded-lg hover:shadow-[0_4px_12px_rgba(0,53,95,0.2)] hover:-translate-y-0.5 transition-all duration-200 pointer-events-auto shadow-sm"
-                  onClick={(e) => { e.stopPropagation(); handleBrowseClick(); }}
-                >
-                  Browse Files
-                </button>
+            <div>
+              <h4 className="font-bold text-gray-800 mb-2">2. Required Column Order</h4>
+              <div className="overflow-hidden border border-gray-200 rounded-lg">
+                <table className="min-w-full text-left bg-white">
+                  <thead className="bg-[#eaf1f5]">
+                    <tr>
+                      <th className="px-4 py-2 font-bold text-[#1f4153] text-xs">Col</th>
+                      <th className="px-4 py-2 font-bold text-[#1f4153] text-xs">Expected Data</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    <tr><td className="px-4 py-2 font-mono text-xs">A</td><td className="px-4 py-2">Day Number (1, 2, 3...)</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">B</td><td className="px-4 py-2">Day (Monday, Tuesday...)</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">C</td><td className="px-4 py-2">Time Slot (08:00 AM - 11:00 AM)</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">D</td><td className="px-4 py-2">Room Type (Lecture Hall, Lab...)</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">E</td><td className="px-4 py-2">Venue (e.g., TC 2-3-2)</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">F</td><td className="px-4 py-2">Unit Code (e.g., BIT 3202A)</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">G</td><td className="px-4 py-2">Unit Name</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">H</td><td className="px-4 py-2">Trimester (e.g., TRI 1)</td></tr>
+                  </tbody>
+                </table>
               </div>
-            )}
+            </div>
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex gap-3">
+              <svg className="w-5 h-5 text-yellow-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+              <p className="text-xs text-yellow-800 font-medium">Virtual classes must have "VIRTUAL" in the Room Type or "ZOOM" in the Venue column to avoid false-positive location conflicts.</p>
+            </div>
+
           </div>
         </div>
 
-        {/* Status Messages */}
-        {uploadMessage && (
-          <div className={`mt-6 p-4 w-full max-w-3xl rounded-lg flex items-center gap-3 ${
-            uploadMessage.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'
-          }`}>
-            <span className="material-symbols-outlined">
-              {uploadMessage.type === 'success' ? 'check_circle' : 'error'}
-            </span>
-            <p className="font-body-lg text-[14px] font-medium">{uploadMessage.text}</p>
+        {/* Upload Zone (Moved to be Second) */}
+        <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 flex flex-col justify-center h-full">
+          
+          <div className="border-2 border-dashed border-[#c8dce6] hover:border-[#1f4153] transition-colors rounded-xl p-10 text-center bg-[#eaf1f5]/30">
+            <svg className="w-16 h-16 text-[#5684a1] mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <h3 className="text-lg font-bold text-[#1f4153] mb-2">Select Excel File</h3>
+            <p className="text-sm text-gray-500 mb-6">Only .xlsx files are supported.</p>
+            
+            <input 
+              type="file" 
+              id="file-upload" 
+              accept=".xlsx" 
+              onChange={handleFileChange} 
+              className="hidden"
+            />
+            <label 
+              htmlFor="file-upload" 
+              className="cursor-pointer inline-block px-6 py-2.5 bg-white border border-[#c8dce6] text-[#1f4153] font-semibold rounded-lg shadow-sm hover:bg-gray-50 transition-colors"
+            >
+              Browse Files
+            </label>
+            
+            {file && (
+              <div className="mt-6 p-3 bg-white border border-[#c8dce6] rounded-lg inline-flex items-center gap-3">
+                <svg className="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                <span className="text-sm font-medium text-gray-700">{file.name}</span>
+              </div>
+            )}
           </div>
-        )}
+
+          {/* Status Messages */}
+          {error && (
+            <div className="mt-4 p-4 bg-red-50 border border-red-100 rounded-lg flex items-start gap-3">
+               <svg className="w-5 h-5 text-red-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+               <span className="text-sm font-medium text-red-800">{error}</span>
+            </div>
+          )}
+          
+          {message && (
+            <div className="mt-4 p-4 bg-green-50 border border-green-100 rounded-lg flex items-start gap-3">
+               <svg className="w-5 h-5 text-green-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+               <span className="text-sm font-medium text-green-800">{message}</span>
+            </div>
+          )}
+
+          <button 
+            onClick={handleUpload}
+            disabled={!file || uploading}
+            className={`w-full mt-6 py-3.5 rounded-xl font-bold text-white shadow-md transition-all ${
+              !file || uploading 
+                ? 'bg-gray-300 cursor-not-allowed' 
+                : 'bg-[#1f4153] hover:bg-[#2c5a73]'
+            }`}
+          >
+            {uploading ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                Processing File...
+              </span>
+            ) : 'Upload and Validate Timetable'}
+          </button>
+
+        </div>
+
       </div>
-    </>
+    </div>
   );
 }
