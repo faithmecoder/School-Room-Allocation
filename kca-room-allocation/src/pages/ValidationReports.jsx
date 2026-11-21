@@ -6,6 +6,8 @@ export default function ValidationReports() {
   const [loading, setLoading] = useState(true);
   const [selectedAlternatives, setSelectedAlternatives] = useState({});
   const [selectedUnitsToMove, setSelectedUnitsToMove] = useState({});
+  const [selectedDay, setSelectedDay] = useState({});
+  const [selectedTime, setSelectedTime] = useState({});
   const [reassigningId, setReassigningId] = useState(null);
 
   const fetchConflicts = () => {
@@ -37,6 +39,36 @@ export default function ValidationReports() {
   useEffect(() => {
     fetchConflicts();
   }, []);
+
+  const handleReschedule = async (conflict) => {
+    const unitToMove = selectedUnitsToMove[conflict.id] || conflict.units_involved?.[0];
+    const newDay = selectedDay[conflict.id] || "FRIDAY";
+    const newTime = selectedTime[conflict.id] || "1400-1700 HRS";
+
+    if (!unitToMove) {
+      alert("No unit selected to reschedule.");
+      return;
+    }
+
+    setReassigningId(conflict.id);
+    try {
+      const response = await axios.post("http://localhost:8000/api/conflicts/reschedule", {
+        cohort: conflict.cohort,
+        unit_to_move: unitToMove,
+        old_day: conflict.day,
+        old_time_slot: conflict.time_slot,
+        new_day: newDay,
+        new_time_slot: newTime,
+      });
+      alert(response.data.message);
+      fetchConflicts();
+    } catch (err) {
+      console.error("Reschedule failed", err);
+      alert(err.response?.data?.detail || "Failed to reschedule class.");
+    } finally {
+      setReassigningId(null);
+    }
+  };
 
   const handleReassign = async (item) => {
     const targetRoom = selectedAlternatives[item.id] || item.suggested_rooms?.[0]?.room_code;
@@ -73,14 +105,14 @@ export default function ValidationReports() {
     }
   };
 
-return (
+  return (
     <div className="animate-fade-in p-6 max-w-7xl mx-auto">
       
-      {/* Updated Header with Green Export Button */}
+      {/* Header with Green Export Button */}
       <div className="mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
         <div>
           <h2 className="text-[32px] font-bold text-gray-800 mb-2 tracking-tight">Validation Reports</h2>
-          <p className="text-gray-600 text-[16px]">Review and resolve room capacity clashes and double-bookings.</p>
+          <p className="text-gray-600 text-[16px]">Review and resolve room capacity clashes, double-bookings, and cohort time overlaps.</p>
         </div>
         
         <a 
@@ -93,7 +125,6 @@ return (
           Export Resolved Timetable
         </a>
       </div>
-
 
       <div className="bg-surface-container-lowest rounded-xl shadow-[0_4px_20px_rgba(15,76,129,0.05)] border border-outline-variant/20 overflow-hidden">
         <div className="overflow-x-auto">
@@ -126,6 +157,7 @@ return (
                 conflicts.map((item) => {
                   const hasSuggestions = item.suggested_rooms && item.suggested_rooms.length > 0;
                   const isWorking = reassigningId === item.id;
+                  const isTimeClash = item.issue?.includes("Cohort Time Clash");
 
                   return (
                     <tr key={item.id} className="hover:bg-surface-container-low/20 transition-colors">
@@ -160,9 +192,36 @@ return (
                         )}
                       </td>
 
-                      {/* Select TARGET room */}
+                      {/* Select TARGET room OR New Day/Time for Cohort Time Clashes */}
                       <td className="px-5 py-4">
-                        {hasSuggestions ? (
+                        {isTimeClash ? (
+                          <div className="flex flex-col gap-1.5">
+                            <select
+                              className="bg-white border border-outline-variant rounded-md px-2 py-1 text-[12px] text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                              value={selectedDay[item.id] || "FRIDAY"}
+                              onChange={(e) => setSelectedDay({ ...selectedDay, [item.id]: e.target.value })}
+                            >
+                              <option value="MONDAY">MONDAY</option>
+                              <option value="TUESDAY">TUESDAY</option>
+                              <option value="WEDNESDAY">WEDNESDAY</option>
+                              <option value="THURSDAY">THURSDAY</option>
+                              <option value="FRIDAY">FRIDAY</option>
+                              <option value="SATURDAY">SATURDAY</option>
+                            </select>
+                            <select
+                              className="bg-white border border-outline-variant rounded-md px-2 py-1 text-[12px] text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                              value={selectedTime[item.id] || "1400-1700 HRS"}
+                              onChange={(e) => setSelectedTime({ ...selectedTime, [item.id]: e.target.value })}
+                            >
+                              <option value="0700-1100 HRS">0700-1100 HRS</option>
+                              <option value="0800-1100 HRS">0800-1100 HRS</option>
+                              <option value="1100-1400 HRS">1100-1400 HRS</option>
+                              <option value="1400-1700 HRS">1400-1700 HRS</option>
+                              <option value="1400-1800 HRS">1400-1800 HRS</option>
+                              <option value="1730-2030 HRS">1730-2030 HRS</option>
+                            </select>
+                          </div>
+                        ) : hasSuggestions ? (
                           <select
                             className="bg-white border border-outline-variant rounded-md px-2 py-1 text-[12px] text-on-surface focus:outline-none focus:ring-1 focus:ring-primary max-w-[180px]"
                             value={selectedAlternatives[item.id] || item.suggested_rooms[0].room_code}
@@ -181,13 +240,23 @@ return (
 
                       {/* Action Button */}
                       <td className="px-5 py-4 text-right">
-                        <button
-                          disabled={!hasSuggestions || isWorking}
-                          onClick={() => handleReassign(item)}
-                          className="px-3 py-1.5 text-[12px] font-semibold rounded-md bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
-                        >
-                          {isWorking ? 'Moving...' : 'Reassign'}
-                        </button>
+                        {isTimeClash ? (
+                          <button
+                            disabled={isWorking}
+                            onClick={() => handleReschedule(item)}
+                            className="px-3 py-1.5 text-[12px] font-semibold rounded-md bg-[#1f4153] text-white hover:bg-[#2c5a73] transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                          >
+                            {isWorking ? 'Saving...' : 'Reschedule'}
+                          </button>
+                        ) : (
+                          <button
+                            disabled={!hasSuggestions || isWorking}
+                            onClick={() => handleReassign(item)}
+                            className="px-3 py-1.5 text-[12px] font-semibold rounded-md bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                          >
+                            {isWorking ? 'Moving...' : 'Reassign'}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

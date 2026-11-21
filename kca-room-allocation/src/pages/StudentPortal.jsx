@@ -32,6 +32,11 @@ export default function StudentPortal() {
       });
   }, [selectedCohort]);
 
+  const getExportUrl = () => {
+    if (!selectedCohort) return 'http://localhost:8000/api/export';
+    return `http://localhost:8000/api/export?cohort=${encodeURIComponent(selectedCohort)}`;
+  };
+
   const groupedSchedule = schedule.reduce((acc, item) => {
     if (!acc[item.day]) acc[item.day] = [];
     acc[item.day].push(item);
@@ -43,12 +48,12 @@ export default function StudentPortal() {
   return (
     <div className="min-h-screen bg-[#eaf1f5] font-sans pb-12">
       
-      {/* Header - Updated to Dark Teal */}
+      {/* Header - Dark Teal */}
       <div className="bg-[#1f4153] text-white px-6 py-8 shadow-md rounded-b-3xl mb-8">
         <div className="max-w-3xl mx-auto flex justify-between items-start">
           <div>
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mb-2">Class Rep & Lecturer Portal</h1>
-            <p className="text-gray-300 text-sm md:text-base">Check your live, conflict-free weekly schedule.</p>
+            <p className="text-gray-300 text-sm md:text-base">Check and download your live, conflict-free weekly schedule.</p>
           </div>
           
           <button 
@@ -64,7 +69,24 @@ export default function StudentPortal() {
         
         {/* Search & Selection Card */}
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 mb-8">
-          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Select Your Cohort</label>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
+              Select Your Cohort
+            </label>
+
+            {selectedCohort && schedule.length > 0 && (
+              <a
+                href={getExportUrl()}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg bg-[#15803d] text-white hover:bg-[#166534] transition-colors shadow-sm whitespace-nowrap"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download Excel ({selectedCohort})
+              </a>
+            )}
+          </div>
+
           <select
             className="w-full border border-gray-300 rounded-xl px-4 py-3 text-[15px] font-semibold text-gray-800 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#1f4153] focus:bg-white transition-colors"
             value={selectedCohort}
@@ -102,7 +124,7 @@ export default function StudentPortal() {
               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
             </div>
             <h3 className="text-lg font-bold text-gray-800">No Cohort Selected</h3>
-            <p className="text-gray-500 text-sm mt-1">Select your cohort from the dropdown above to view your classes.</p>
+            <p className="text-gray-500 text-sm mt-1">Select your cohort from the dropdown above to view or download your classes.</p>
           </div>
         ) : schedule.length === 0 ? (
           <div className="text-center py-12 text-gray-500 bg-white rounded-2xl border border-gray-100 shadow-sm">

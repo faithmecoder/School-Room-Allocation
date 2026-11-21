@@ -1,24 +1,23 @@
 import re
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from database import connect_to_mongo, close_mongo_connection, db_manager
-from routers import rooms
-import pandas as pd
 import io
-from pydantic import BaseModel
-from bson import ObjectId
-from fastapi.responses import StreamingResponse
+import hashlib
+import smtplib
 from typing import Optional
 from collections import defaultdict
 from datetime import datetime
-from pydantic import BaseModel
-import xlsxwriter
-from bson import ObjectId
-import hashlib
-
-import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+import pandas as pd
+import xlsxwriter
+from bson import ObjectId
+from pydantic import BaseModel
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+
+from database import connect_to_mongo, close_mongo_connection, db_manager
+from routers import rooms
 
 app = FastAPI(title="Room Allocation System API")
 app.include_router(rooms.router)
@@ -32,17 +31,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+DEFAULT_COHORT_SIZE = 50  # Baseline student headcount per cohort
+
+
 @app.on_event("startup")
 async def startup_db_client():
     await connect_to_mongo()
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
     await close_mongo_connection()
 
+
 @app.get("/")
 async def root():
     return {"message": "KCA Room Allocation API is running and connected to MongoDB."}
+
+
+# --- DATA INGESTION & EXCEL PARSING ---
 
 @app.post("/api/upload")
 async def upload_timetable(file: UploadFile = File(...)):
@@ -53,39 +60,54 @@ async def upload_timetable(file: UploadFile = File(...)):
         contents = await file.read()
         xls = pd.ExcelFile(io.BytesIO(contents))
         parsed_records = []
-        
+        seen_entries = set()
+
         for sheet_name in xls.sheet_names:
             df = pd.read_excel(xls, sheet_name=sheet_name, header=None)
             current_cohort = "Unknown"
-            
-            for index, row in df.iterrows():
+
+            for _, row in df.iterrows():
                 col0 = str(row[0]).strip() if pd.notna(row[0]) else ""
                 col1 = str(row[1]).strip() if pd.notna(row[1]) else ""
-                
+
                 if not col0 and not col1:
                     continue
-                    
+
                 if col0 and not col1 and "BACHELOR" not in col0.upper():
                     current_cohort = col0
                     continue
-                
+
                 if col0.upper() == "DAY NO":
                     continue
-                    
+
                 if col0.isdigit():
                     room_type = str(row[3]).strip() if pd.notna(row[3]) else ""
                     room_code = str(row[4]).strip() if pd.notna(row[4]) else ""
-                    
+                    day_val = str(row[1]).strip() if pd.notna(row[1]) else ""
+                    time_val = str(row[2]).strip() if pd.notna(row[2]) else ""
+                    unit_code_val = str(row[5]).strip() if pd.notna(row[5]) else ""
+
+                    # Deduplicate by (cohort, day, time_slot, unit_code)
+                    dedup_key = (
+                        current_cohort.upper(),
+                        day_val.upper(),
+                        time_val.upper(),
+                        unit_code_val.upper()
+                    )
+                    if dedup_key in seen_entries:
+                        continue
+                    seen_entries.add(dedup_key)
+
                     record = {
                         "program_sheet": sheet_name,
                         "cohort": current_cohort,
                         "trimester": str(row[7]).strip() if pd.notna(row[7]) else "",
-                        "unit_code": str(row[5]).strip() if pd.notna(row[5]) else "",
+                        "unit_code": unit_code_val,
                         "unit_name": str(row[6]).strip() if pd.notna(row[6]) else "",
                         "schedule": {
                             "day_no": int(col0),
-                            "day": str(row[1]).strip() if pd.notna(row[1]) else "",
-                            "time_slot": str(row[2]).strip() if pd.notna(row[2]) else ""
+                            "day": day_val,
+                            "time_slot": time_val
                         },
                         "allocation": {
                             "room_type": room_type,
@@ -97,25 +119,25 @@ async def upload_timetable(file: UploadFile = File(...)):
                         }
                     }
                     parsed_records.append(record)
-        
+
         if parsed_records:
             # 1. Save the parsed timetable data
             await db_manager.timetables.delete_many({})
             await db_manager.timetables.insert_many(parsed_records)
-            
+
             # 2. Extract unique rooms and save them to the rooms collection
             unique_room_codes = {
-                str(record["allocation"]["room_code"]).strip() 
-                for record in parsed_records 
+                str(record["allocation"]["room_code"]).strip()
+                for record in parsed_records
                 if record.get("allocation") and record["allocation"].get("room_code")
             }
-            
+
             invalid_rooms = ["", "NAN", "NONE", "VIRTUAL", "ZOOM"]
-            
+
             for code in unique_room_codes:
                 clean_code = str(code).strip()
                 is_date = bool(re.search(r"\d{4}-\d{2}-\d{2}", clean_code))
-                
+
                 if clean_code.upper() not in invalid_rooms and not is_date:
                     existing_room = await db_manager.rooms.find_one({"room_code": clean_code})
                     if not existing_room:
@@ -124,15 +146,14 @@ async def upload_timetable(file: UploadFile = File(...)):
                             "capacity": 0,
                             "room_type": "Pending"
                         })
-            
+
         return {
-            "status": "success", 
-            "message": f"Successfully parsed and inserted {len(parsed_records)} classes into the database."
+            "status": "success",
+            "message": f"Successfully parsed and inserted {len(parsed_records)} unique classes into the database."
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
-
 
 
 @app.post("/api/rooms/bulk-upload")
@@ -143,19 +164,17 @@ async def bulk_upload_rooms(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
-        
-        # Parse based on extension
+
         if file.filename.endswith('.csv'):
             df = pd.read_csv(io.BytesIO(contents))
         else:
             df = pd.read_excel(io.BytesIO(contents))
 
-        # Standardize column names to lowercase stripped strings
         df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
         if 'room_code' not in df.columns or 'capacity' not in df.columns:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="File must contain at least 'room_code' and 'capacity' columns."
             )
 
@@ -170,7 +189,6 @@ async def bulk_upload_rooms(file: UploadFile = File(...)):
             except (ValueError, TypeError):
                 cap = 0
 
-            # Optional room_type column fallback
             if 'room_type' in df.columns and pd.notna(row['room_type']):
                 r_type = str(row['room_type']).strip()
             elif "LAB" in raw_code.upper():
@@ -180,7 +198,6 @@ async def bulk_upload_rooms(file: UploadFile = File(...)):
             else:
                 r_type = "Lecture Hall"
 
-            # Upsert into MongoDB
             await db_manager.rooms.update_one(
                 {"room_code": raw_code},
                 {"$set": {
@@ -201,24 +218,54 @@ async def bulk_upload_rooms(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 
-# --- DATA ENDPOINTS ---
-
-@app.get("/api/dashboard-stats")
-async def get_dashboard_stats():
+@app.post("/api/rooms/sync")
+async def sync_rooms_from_db():
+    """Scans existing timetables in the database and extracts missing rooms."""
     try:
-        total_classes = await db_manager.timetables.count_documents({})
-        total_rooms = await db_manager.rooms.count_documents({})
-        unique_cohorts = await db_manager.timetables.distinct("cohort")
-        
-        return {
-            "total_classes": total_classes,
-            "total_rooms": total_rooms,
-            "active_cohorts": len(unique_cohorts)
-        }
+        unique_rooms = await db_manager.timetables.distinct("allocation.room_code")
+        invalid_rooms = ["", "NAN", "NONE", "VIRTUAL", "ZOOM"]
+
+        added_count = 0
+        for code in unique_rooms:
+            if not code:
+                continue
+
+            clean_code = str(code).strip()
+            is_date = bool(re.search(r"\d{4}-\d{2}-\d{2}", clean_code))
+
+            if clean_code.upper() not in invalid_rooms and not is_date:
+                existing_room = await db_manager.rooms.find_one({"room_code": clean_code})
+                if not existing_room:
+                    await db_manager.rooms.insert_one({
+                        "room_code": clean_code,
+                        "capacity": 0,
+                        "room_type": "Pending"
+                    })
+                    added_count += 1
+
+        return {"message": f"Sync complete! Automatically extracted {added_count} new rooms from existing timetables."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-DEFAULT_COHORT_SIZE = 50  # Estimated students per cohort
+
+# --- CONFLICT DETECTION & RESOLUTION ---
+
+class ReassignRequest(BaseModel):
+    day: str
+    time_slot: str
+    old_room: str
+    new_room: str
+    unit_to_move: str
+
+
+class RescheduleRequest(BaseModel):
+    cohort: str
+    unit_to_move: str
+    old_day: str
+    old_time_slot: str
+    new_day: str
+    new_time_slot: str
+
 
 @app.get("/api/conflicts")
 async def get_real_conflicts():
@@ -249,7 +296,7 @@ async def get_real_conflicts():
             async for item in all_occupied_cursor
         }
 
-        # 3. Find double bookings and combined sessions
+        # 3. Find physical double bookings and capacity overruns
         pipeline = [
             {"$match": {
                 "allocation.room_code": {"$nin": ["ZOOM", "nan", "", "VIRTUAL", None]}
@@ -279,14 +326,12 @@ async def get_real_conflicts():
             day = s["_id"]["day"]
             time_slot = s["_id"]["time"]
 
-            # Check conflict conditions
             is_double_booking = s["count"] > 1 and len(s.get("unique_units", [])) > 1
             current_room_meta = room_dict.get(room_code, {"capacity": 0, "type": "Lecture Hall"})
             room_capacity = current_room_meta["capacity"]
             estimated_students = len(s.get("cohorts", [])) * DEFAULT_COHORT_SIZE
             is_capacity_overrun = room_capacity > 0 and estimated_students > room_capacity
 
-            # Only process if there is a scheduling clash or capacity overflow
             if is_double_booking or is_capacity_overrun:
                 involved_classes = [
                     f"{c} ({u})" for c, u in zip(s.get("cohorts", []), s.get("units", []))
@@ -303,7 +348,7 @@ async def get_real_conflicts():
                 # 4. Alternative Room Search (Adaptive & Normalized)
                 clean_slot_key = f"{str(day).strip().upper()}_{str(time_slot).strip().upper()}"
                 occupied_set = {
-                    str(r).strip().upper() 
+                    str(r).strip().upper()
                     for r in occupied_matrix.get(clean_slot_key, set())
                 }
 
@@ -313,22 +358,17 @@ async def get_real_conflicts():
                 for candidate_code, meta in room_dict.items():
                     norm_candidate = str(candidate_code).strip().upper()
 
-                    # Rule A: Skip if already booked during this time
                     if norm_candidate in occupied_set:
                         continue
-                    
-                    # Rule B: Skip the conflicting room itself
                     if norm_candidate == str(room_code).strip().upper():
                         continue
 
-                    # Rule C: Check capacity compatibility
                     cand_cap = meta.get("capacity", 0)
                     has_enough_seats = (cand_cap >= estimated_students) if cand_cap > 0 else True
 
-                    # Rule D: Check facility type
                     cand_type = meta.get("type", "Lecture Hall")
                     is_type_match = (
-                        cand_type.strip().lower() == str(primary_room_type).strip().lower() 
+                        cand_type.strip().lower() == str(primary_room_type).strip().lower()
                         or cand_type == "Pending"
                     )
 
@@ -340,10 +380,6 @@ async def get_real_conflicts():
                         "has_enough_seats": has_enough_seats
                     })
 
-                # Sort priority:
-                # 1. Matching type + sufficient seats
-                # 2. Matching type
-                # 3. Best capacity fit
                 suggested_rooms.sort(
                     key=lambda r: (
                         not (r["exact_type_match"] and r["has_enough_seats"]),
@@ -360,181 +396,54 @@ async def get_real_conflicts():
                     "course": course_display,
                     "issue": issue_title,
                     "severity": severity,
-                    "units_involved": list(s.get("unique_units", [])),  # List of distinct units
+                    "units_involved": list(s.get("unique_units", [])),
                     "suggested_rooms": suggested_rooms[:5]
                 })
                 conflict_counter += 1
 
-        return formatted_conflicts
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-@app.post("/api/rooms/sync")
-async def sync_rooms_from_db():
-    """Scans existing timetables in the database and extracts missing rooms."""
-    try:
-        # Get all unique rooms currently in the timetables collection
-        unique_rooms = await db_manager.timetables.distinct("allocation.room_code")
-        invalid_rooms = ["", "NAN", "NONE", "VIRTUAL", "ZOOM"]
-        
-        added_count = 0
-        for code in unique_rooms:
-            if not code:
-                continue
-
-            clean_code = str(code).strip()
-            is_date = bool(re.search(r"\d{4}-\d{2}-\d{2}", clean_code))
-
-            if clean_code.upper() not in invalid_rooms and not is_date:
-                existing_room = await db_manager.rooms.find_one({"room_code": clean_code})
-
-                # Only insert if it doesn't already exist in the rooms collection
-                if not existing_room:
-                    await db_manager.rooms.insert_one({
-                        "room_code": clean_code,
-                        "capacity": 0,
-                        "room_type": "Pending"
-                    })
-                    added_count += 1
-
-        return {"message": f"Sync complete! Automatically extracted {added_count} new rooms from existing timetables."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))  
-
-
-class ReassignRequest(BaseModel):
-    day: str
-    time_slot: str
-    old_room: str
-    new_room: str
-    unit_to_move: str # The specific unit chosen to relocate
-
-DEFAULT_COHORT_SIZE = 50  # Baseline student headcount per cohort
-
-@app.get("/api/conflicts")
-async def get_real_conflicts():
-    try:
-        # Pre-fetch registered rooms for quick metadata lookups (capacity, type)
-        rooms_cursor = db_manager.rooms.find({})
-        rooms_list = await rooms_cursor.to_list(length=200)
-        room_dict = {
-            r["room_code"]: {
-                "capacity": r.get("capacity", 0),
-                "type": r.get("room_type", "Lecture Hall")
-            }
-            for r in rooms_list
-        }
-
-        # 1. Aggregate classes grouped by room, day, and time slot
-        pipeline = [
-            {"$match": {
-                "allocation.room_code": {"$nin": ["ZOOM", "nan", "", "VIRTUAL", None]}
-            }},
+        # 5. Cohort Time-Slot Clash Check (ignores duplicate rows of the same unit code)
+        cohort_pipeline = [
             {"$group": {
                 "_id": {
-                    "room": "$allocation.room_code",
+                    "cohort": "$cohort",
                     "day": "$schedule.day",
                     "time": "$schedule.time_slot"
                 },
                 "count": {"$sum": 1},
                 "units": {"$push": "$unit_name"},
-                "unit_codes": {"$push": "$unit_code"},
-                "unique_units": {"$addToSet": "$unit_name"},
-                "cohorts": {"$push": "$cohort"},
-                "room_types": {"$push": "$allocation.room_type"}
+                "unique_unit_codes": {"$addToSet": {"$toUpper": {"$trim": {"input": "$unit_code"}}}},
+                "rooms": {"$push": "$allocation.room_code"}
+            }},
+            {"$match": {
+                "count": {"$gt": 1},
+                "_id.cohort": {"$nin": ["UNKNOWN", "", None]}
             }}
         ]
 
-        cursor = db_manager.timetables.aggregate(pipeline)
-        slots = await cursor.to_list(length=300)
+        cohort_slots = await db_manager.timetables.aggregate(cohort_pipeline).to_list(length=300)
 
-        # Pre-fetch all occupied rooms grouped by (day, time) for slot lookup
-        all_occupied_cursor = db_manager.timetables.aggregate([
-            {"$group": {
-                "_id": {"day": "$schedule.day", "time": "$schedule.time_slot"},
-                "occupied_rooms": {"$addToSet": "$allocation.room_code"}
-            }}
-        ])
-        occupied_matrix = {
-            f"{item['_id']['day']}_{item['_id']['time']}": set(item.get("occupied_rooms", []))
-            async for item in all_occupied_cursor
-        }
+        for cs in cohort_slots:
+            if len(cs.get("unique_unit_codes", [])) <= 1:
+                continue
 
-        formatted_conflicts = []
-        conflict_counter = 1
+            cohort_name = cs["_id"]["cohort"]
+            day = cs["_id"]["day"]
+            time_slot = cs["_id"]["time"]
+            paired = [f"{u} [{r}]" for u, r in zip(cs.get("units", []), cs.get("rooms", []))]
 
-        for s in slots:
-            room_code = s["_id"]["room"]
-            day = s["_id"]["day"]
-            time_slot = s["_id"]["time"]
-
-            # Cohort and unit pairings
-            involved_classes = [
-                f"{c} ({u})" for c, u in zip(s.get("cohorts", []), s.get("units", []))
-            ]
-            course_display = " vs ".join(involved_classes)
-
-            # Metadata resolution
-            current_room_meta = room_dict.get(room_code, {"capacity": 0, "type": "Lecture Hall"})
-            room_capacity = current_room_meta["capacity"]
-            primary_room_type = s["room_types"][0] if s["room_types"] else current_room_meta["type"]
-            
-            # Estimated headcount (number of cohorts * default size)
-            estimated_students = len(s.get("cohorts", [])) * DEFAULT_COHORT_SIZE
-
-            is_double_booking = s["count"] > 1 and len(s.get("unique_units", [])) > 1
-            is_capacity_overrun = room_capacity > 0 and estimated_students > room_capacity
-
-            # If either condition is met, flag as conflict
-            if is_double_booking or is_capacity_overrun:
-                # Determine issue type and severity
-                if is_double_booking:
-                    issue_title = f"Double Booking on {day} at {time_slot}"
-                    severity = "High"
-                else:
-                    issue_title = f"Capacity Overrun: ~{estimated_students} students in {room_code} (Max {room_capacity})"
-                    severity = "Medium"
-
-                # Smart Reassignment Engine: Query free rooms for this slot
-                occupied_set = occupied_matrix.get(f"{day}_{time_slot}", set())
-
-                suggested_rooms = []
-                for candidate_code, meta in room_dict.items():
-                    # Rule 1: Room must not be occupied in this slot
-                    if candidate_code in occupied_set:
-                        continue
-                    # Rule 2: Room must have defined capacity and meet student demand
-                    if meta["capacity"] > 0 and meta["capacity"] < estimated_students:
-                        continue
-                    # Rule 3: Prefer matching room type
-                    is_type_match = meta["type"].lower() == primary_room_type.lower()
-
-                    suggested_rooms.append({
-                        "room_code": candidate_code,
-                        "capacity": meta["capacity"],
-                        "type": meta["type"],
-                        "exact_type_match": is_type_match
-                    })
-
-                # Sort suggestions: exact type matches first, then closest capacity fit
-                suggested_rooms.sort(
-                    key=lambda r: (not r["exact_type_match"], r["capacity"] if r["capacity"] > 0 else 9999)
-                )
-
-                formatted_conflicts.append({
-                    "id": f"CONF-{str(conflict_counter).zfill(3)}",
-                    "room": room_code,
-                    "day": day,
-                    "time_slot": time_slot,
-                    "course": course_display,
-                    "issue": issue_title,
-                    "severity": severity,
-                    "estimated_students": estimated_students,
-                    "room_capacity": room_capacity,
-                    "suggested_rooms": suggested_rooms[:5]  # Top 5 recommendations
-                })
-                conflict_counter += 1
+            formatted_conflicts.append({
+                "id": f"CONF-{str(conflict_counter).zfill(3)}",
+                "cohort": cohort_name,
+                "room": ", ".join(cs.get("rooms", [])),
+                "day": day,
+                "time_slot": time_slot,
+                "course": f"{cohort_name}: " + " vs ".join(paired),
+                "issue": f"Cohort Time Clash on {day} at {time_slot} (Overlapping sessions)",
+                "severity": "High",
+                "units_involved": list(set(cs.get("units", []))),
+                "suggested_rooms": []
+            })
+            conflict_counter += 1
 
         return formatted_conflicts
 
@@ -552,7 +461,7 @@ async def reassign_room(payload: ReassignRequest):
             "schedule.time_slot": payload.time_slot,
             "unit_name": payload.unit_to_move
         }
-        
+
         update_query = {
             "$set": {
                 "allocation.room_code": payload.new_room
@@ -567,20 +476,72 @@ async def reassign_room(payload: ReassignRequest):
             "status": "success",
             "message": f"Successfully relocated '{payload.unit_to_move}' to {payload.new_room}."
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/conflicts/reschedule")
+async def reschedule_class(payload: RescheduleRequest):
+    """Moves a clashing unit to a new day and/or time slot to resolve a cohort time clash."""
+    try:
+        day_map = {
+            "MONDAY": 1,
+            "TUESDAY": 2,
+            "WEDNESDAY": 3,
+            "THURSDAY": 4,
+            "FRIDAY": 5,
+            "SATURDAY": 6
+        }
+        clean_new_day = payload.new_day.strip().upper()
+        new_day_no = day_map.get(clean_new_day, 1)
+
+        filter_query = {
+            "cohort": payload.cohort,
+            "unit_name": payload.unit_to_move,
+            "schedule.day": payload.old_day,
+            "schedule.time_slot": payload.old_time_slot
+        }
+
+        update_query = {
+            "$set": {
+                "schedule.day": clean_new_day,
+                "schedule.day_no": new_day_no,
+                "schedule.time_slot": payload.new_time_slot.strip()
+            }
+        }
+
+        result = await db_manager.timetables.update_one(filter_query, update_query)
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Class record not found for rescheduling.")
+
+        return {
+            "status": "success",
+            "message": f"Rescheduled '{payload.unit_to_move}' to {clean_new_day} at {payload.new_time_slot}."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- EXPORT & ANALYTICS ---
 
 @app.get("/api/export")
-async def export_timetable():
-    """Exports the resolved timetable matching the original nested format with Times New Roman."""
+async def export_timetable(cohort: Optional[str] = None, room: Optional[str] = None):
+    """Exports the resolved timetable (full or filtered by cohort/room) in Times New Roman."""
     try:
-        # Fetch all records, sorted by Program, Cohort, Day, and Time
-        cursor = db_manager.timetables.find({}).sort([
+        query = {}
+        if cohort and cohort.strip().upper() != "ALL":
+            query["cohort"] = cohort.strip()
+        if room and room.strip().upper() != "ALL":
+            query["allocation.room_code"] = room.strip()
+
+        cursor = db_manager.timetables.find(query).sort([
             ("program_sheet", 1),
             ("cohort", 1),
-            ("schedule.day_no", 1), 
+            ("schedule.day_no", 1),
             ("schedule.time_slot", 1)
         ])
         records = await cursor.to_list(length=None)
@@ -588,13 +549,12 @@ async def export_timetable():
         if not records:
             raise HTTPException(status_code=404, detail="No timetable data found to export.")
 
-        # Group data: first by Program Sheet, then by Cohort
         grouped_data = defaultdict(lambda: defaultdict(list))
         for r in records:
             sheet = r.get("program_sheet", "Other")
-            cohort = r.get("cohort", "UNKNOWN COHORT")
-            
-            grouped_data[sheet][cohort].append({
+            cohort_name = r.get("cohort", "UNKNOWN COHORT")
+
+            grouped_data[sheet][cohort_name].append({
                 "#": r.get("schedule", {}).get("day_no", ""),
                 "DAY": str(r.get("schedule", {}).get("day", "")).upper(),
                 "TIME": r.get("schedule", {}).get("time_slot", ""),
@@ -606,26 +566,18 @@ async def export_timetable():
             })
 
         output = io.BytesIO()
-        
-        # We use xlsxwriter directly to build the custom layout
-        import xlsxwriter
         with xlsxwriter.Workbook(output) as workbook:
-            
-            # --- Define Times New Roman Formats ---
             base_font = 'Times New Roman'
-            
-            # Dark Blue Cohort Header (Matches the image)
+
             cohort_header_format = workbook.add_format({
                 'bold': True,
                 'font_name': base_font,
                 'font_size': 14,
                 'font_color': 'white',
-                'bg_color': '#005eb8',  # KCA / standard dark blue
+                'bg_color': '#005eb8',
                 'valign': 'vcenter',
                 'border': 1
             })
-            
-            # Column Headers (#, DAY, TIME...)
             col_header_format = workbook.add_format({
                 'bold': True,
                 'font_name': base_font,
@@ -634,16 +586,12 @@ async def export_timetable():
                 'valign': 'vcenter',
                 'border': 1
             })
-            
-            # Standard Data Cells
             cell_format = workbook.add_format({
                 'font_name': base_font,
                 'font_size': 11,
                 'valign': 'vcenter',
                 'border': 1
             })
-            
-            # Centered Data Cells (for the # column)
             centered_cell_format = workbook.add_format({
                 'font_name': base_font,
                 'font_size': 11,
@@ -653,66 +601,75 @@ async def export_timetable():
             })
 
             columns = ["#", "DAY", "TIME", "ROOM TYPE", "VENUE", "UNIT CODE", "UNIT NAME", "TRIMESTER"]
-            
-            # --- Build the Sheets ---
+
             for sheet_name, cohorts_dict in grouped_data.items():
-                # Clean sheet name for Excel rules
                 clean_name = re.sub(r'[\\/*?:\[\]]', '', str(sheet_name))
                 safe_sheet_name = clean_name[:31].strip()
-                
                 worksheet = workbook.add_worksheet(safe_sheet_name)
-                
+
                 row_idx = 0
                 col_widths = {c: len(c) for c in columns}
-                
-                for cohort, rows in cohorts_dict.items():
-                    # 1. Write the Cohort Title (Merged across all 8 columns)
-                    worksheet.merge_range(row_idx, 0, row_idx, len(columns)-1, cohort, cohort_header_format)
+
+                for cohort_key, rows in cohorts_dict.items():
+                    worksheet.merge_range(row_idx, 0, row_idx, len(columns) - 1, cohort_key, cohort_header_format)
                     row_idx += 1
-                    
-                    # 2. Write the Column Headers
+
                     for col_num, col_name in enumerate(columns):
                         worksheet.write(row_idx, col_num, col_name, col_header_format)
                     row_idx += 1
-                    
-                    # 3. Write the Data Rows
+
                     for row_data in rows:
                         for col_num, col_name in enumerate(columns):
                             val = str(row_data.get(col_name, ""))
-                            
-                            if col_name == "#":
-                                worksheet.write(row_idx, col_num, val, centered_cell_format)
-                            else:
-                                worksheet.write(row_idx, col_num, val, cell_format)
-                            
-                            # Track max width for auto-sizing
+                            fmt = centered_cell_format if col_name == "#" else cell_format
+                            worksheet.write(row_idx, col_num, val, fmt)
                             if len(val) > col_widths[col_name]:
                                 col_widths[col_name] = len(val)
-                                
                         row_idx += 1
-                        
-                # 4. Set final column widths
+
                 for col_num, col_name in enumerate(columns):
-                    if col_name == "#":
-                        worksheet.set_column(col_num, col_num, 5)  # Make # column narrow
-                    else:
-                        width = min(col_widths[col_name] + 2, 50)  # Add padding, cap at 50
-                        worksheet.set_column(col_num, col_num, width)
+                    width = 5 if col_name == "#" else min(col_widths[col_name] + 2, 50)
+                    worksheet.set_column(col_num, col_num, width)
 
         output.seek(0)
 
-        headers = {
-            'Content-Disposition': 'attachment; filename="Resolved_Master_Timetable.xlsx"'
-        }
+        # Build a clean filename based on what was filtered
+        if cohort and cohort.strip().upper() != "ALL":
+            safe_name = re.sub(r'[^A-Za-z0-9_-]+', '_', cohort.strip()).strip('_')
+            filename = f"{safe_name}_Timetable.xlsx"
+        elif room and room.strip().upper() != "ALL":
+            safe_name = re.sub(r'[^A-Za-z0-9_-]+', '_', room.strip()).strip('_')
+            filename = f"Room_{safe_name}_Timetable.xlsx"
+        else:
+            filename = "Resolved_Master_Timetable.xlsx"
+
+        headers = {'Content-Disposition': f'attachment; filename="{filename}"'}
         return StreamingResponse(
-            output, 
-            headers=headers, 
+            output,
+            headers=headers,
             media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/dashboard-stats")
+async def get_basic_dashboard_stats():
+    try:
+        total_classes = await db_manager.timetables.count_documents({})
+        total_rooms = await db_manager.rooms.count_documents({})
+        unique_cohorts = await db_manager.timetables.distinct("cohort")
+
+        return {
+            "total_classes": total_classes,
+            "total_rooms": total_rooms,
+            "active_cohorts": len(unique_cohorts)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/stats")
@@ -722,27 +679,25 @@ async def get_dashboard_stats():
         total_classes = await db_manager.timetables.count_documents({})
         cohorts = await db_manager.timetables.distinct("cohort")
         rooms = await db_manager.timetables.distinct("allocation.room_code")
-        
+
         valid_cohorts = [c for c in cohorts if c and str(c).upper() != "UNKNOWN"]
         valid_rooms = [r for r in rooms if r and str(r).upper() not in ["ZOOM", "VIRTUAL", "NAN", "NONE"]]
-        
-        # Room Utilization Aggregation (Removed the $limit to get ALL rooms)
+
         pipeline = [
             {"$match": {"allocation.room_code": {"$nin": ["ZOOM", "VIRTUAL", "NAN", "NONE", "", None, "TBA"]}}},
             {"$group": {"_id": "$allocation.room_code", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}}
         ]
         utilization_cursor = db_manager.timetables.aggregate(pipeline)
-        all_rooms = await utilization_cursor.to_list(length=None) # Set length=None to fetch all
-        
+        all_rooms = await utilization_cursor.to_list(length=None)
+
         utilization_data = [{"room": r["_id"], "classes": r["count"]} for r in all_rooms]
-        
-        # Calculate overall physical utilization rate
+
         total_possible_slots = len(valid_rooms) * 20 if len(valid_rooms) > 0 else 1
         physical_classes = await db_manager.timetables.count_documents({
             "allocation.room_code": {"$nin": ["ZOOM", "VIRTUAL", "NAN", "NONE", "", None, "TBA"]}
         })
-        
+
         utilization_rate = min(round((physical_classes / total_possible_slots) * 100, 1), 100.0) if total_possible_slots > 0 else 0
 
         return {
@@ -750,16 +705,17 @@ async def get_dashboard_stats():
             "total_cohorts": len(valid_cohorts),
             "total_rooms": len(valid_rooms),
             "utilization_rate": utilization_rate,
-            "top_utilized_rooms": utilization_data # Now contains all rooms
+            "top_utilized_rooms": utilization_data
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
+# --- VERSION HISTORY & SNAPSHOTS ---
 
 class VersionRequest(BaseModel):
     version_name: str
+
 
 @app.post("/api/versions/snapshot")
 async def create_version_snapshot(request: VersionRequest):
@@ -779,41 +735,38 @@ async def create_version_snapshot(request: VersionRequest):
             "data": current_records
         }
 
-        # FIXED: Explicitly routes to the same database hosting your timetables
         await db_manager.timetables.database["timetable_history"].insert_one(snapshot)
-        
         return {"message": f"Successfully saved version: {request.version_name}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/versions")
 async def get_version_history():
     """Retrieves a list of all saved timetable versions."""
     try:
-        # FIXED: Explicit database routing
         cursor = db_manager.timetables.database["timetable_history"].find({}, {"data": 0}).sort("created_at", -1)
         history = await cursor.to_list(length=None)
-        
-        formatted_history = []
-        for item in history:
-            formatted_history.append({
+
+        return [
+            {
                 "id": str(item["_id"]),
                 "version_name": item["version_name"],
                 "created_at": item["created_at"],
                 "total_classes": item["total_classes"]
-            })
-            
-        return formatted_history
+            }
+            for item in history
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/versions/{version_id}/restore")
 async def restore_version(version_id: str):
     """Overwrites the active timetable with a previously saved version."""
     try:
-        # FIXED: Explicit database routing
         snapshot = await db_manager.timetables.database["timetable_history"].find_one({"_id": ObjectId(version_id)})
-        
+
         if not snapshot:
             raise HTTPException(status_code=404, detail="Saved version not found.")
         if not snapshot.get("data"):
@@ -821,20 +774,20 @@ async def restore_version(version_id: str):
 
         await db_manager.timetables.delete_many({})
         await db_manager.timetables.insert_many(snapshot["data"])
-        
+
         return {"message": f"Successfully restored version: {snapshot['version_name']}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/versions/{version_id}/export")
 async def export_version(version_id: str):
     """Generates the formatted Excel file for a specific archived version."""
     try:
-        # FIXED: Explicit database routing
         snapshot = await db_manager.timetables.database["timetable_history"].find_one({"_id": ObjectId(version_id)})
         if not snapshot:
             raise HTTPException(status_code=404, detail="Version not found.")
-            
+
         records = snapshot.get("data", [])
         if not records:
             raise HTTPException(status_code=400, detail="No data in this version.")
@@ -843,7 +796,7 @@ async def export_version(version_id: str):
         for r in records:
             sheet = r.get("program_sheet", "Other")
             cohort = r.get("cohort", "UNKNOWN COHORT")
-            
+
             grouped_data[sheet][cohort].append({
                 "#": r.get("schedule", {}).get("day_no", ""),
                 "DAY": str(r.get("schedule", {}).get("day", "")).upper(),
@@ -870,30 +823,31 @@ async def export_version(version_id: str):
             centered_cell_format = workbook.add_format({'font_name': base_font, 'font_size': 11, 'align': 'center', 'valign': 'vcenter', 'border': 1})
 
             columns = ["#", "DAY", "TIME", "ROOM TYPE", "VENUE", "UNIT CODE", "UNIT NAME", "TRIMESTER"]
-            
+
             for sheet_name, cohorts_dict in grouped_data.items():
                 safe_sheet_name = re.sub(r'[\\/*?:\[\]]', '', str(sheet_name))[:31].strip()
                 worksheet = workbook.add_worksheet(safe_sheet_name)
-                
+
                 row_idx = 0
                 col_widths = {c: len(c) for c in columns}
-                
+
                 for cohort, rows in cohorts_dict.items():
-                    worksheet.merge_range(row_idx, 0, row_idx, len(columns)-1, cohort, cohort_header_format)
+                    worksheet.merge_range(row_idx, 0, row_idx, len(columns) - 1, cohort, cohort_header_format)
                     row_idx += 1
-                    
+
                     for col_num, col_name in enumerate(columns):
                         worksheet.write(row_idx, col_num, col_name, col_header_format)
                     row_idx += 1
-                    
+
                     for row_data in rows:
                         for col_num, col_name in enumerate(columns):
                             val = str(row_data.get(col_name, ""))
                             fmt = centered_cell_format if col_name == "#" else cell_format
                             worksheet.write(row_idx, col_num, val, fmt)
-                            if len(val) > col_widths[col_name]: col_widths[col_name] = len(val)
+                            if len(val) > col_widths[col_name]:
+                                col_widths[col_name] = len(val)
                         row_idx += 1
-                        
+
                 for col_num, col_name in enumerate(columns):
                     width = 5 if col_name == "#" else min(col_widths[col_name] + 2, 50)
                     worksheet.set_column(col_num, col_num, width)
@@ -901,41 +855,46 @@ async def export_version(version_id: str):
         output.seek(0)
         file_name = f"Archived_{snapshot.get('version_name', 'Timetable')}.xlsx"
         headers = {'Content-Disposition': f'attachment; filename="{file_name}"'}
-        
+
         return StreamingResponse(
-            output, headers=headers, 
+            output,
+            headers=headers,
             media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/versions/{version_id}/stats")
 async def get_version_stats(version_id: str):
     """Calculates utilization and metrics for a specific archived version."""
     try:
-        # FIXED: Explicit database routing
         snapshot = await db_manager.timetables.database["timetable_history"].find_one({"_id": ObjectId(version_id)})
         if not snapshot:
             raise HTTPException(status_code=404, detail="Version not found.")
-            
+
         records = snapshot.get("data", [])
-        
+
         valid_cohorts = set()
         valid_rooms = set()
         room_counts = {}
-        
+
         for r in records:
             cohort = r.get("cohort")
             if cohort and str(cohort).upper() != "UNKNOWN":
                 valid_cohorts.add(cohort)
-                
+
             room = r.get("allocation", {}).get("room_code")
             if room and str(room).upper() not in ["ZOOM", "VIRTUAL", "NAN", "NONE", "", None, "TBA"]:
                 valid_rooms.add(room)
                 room_counts[room] = room_counts.get(room, 0) + 1
 
-        sorted_rooms = sorted([{"room": k, "classes": v} for k, v in room_counts.items()], key=lambda x: x["classes"], reverse=True)
-        
+        sorted_rooms = sorted(
+            [{"room": k, "classes": v} for k, v in room_counts.items()],
+            key=lambda x: x["classes"],
+            reverse=True
+        )
+
         total_possible_slots = len(valid_rooms) * 20 if len(valid_rooms) > 0 else 1
         physical_classes = sum(room_counts.values())
         utilization_rate = min(round((physical_classes / total_possible_slots) * 100, 1), 100.0) if total_possible_slots > 0 else 0
@@ -952,13 +911,13 @@ async def get_version_stats(version_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
-
+# --- FACILITY MANAGEMENT (CRUD) ---
 
 class RoomModel(BaseModel):
     room_code: str
     room_type: str
     capacity: int
+
 
 @app.get("/api/rooms")
 async def get_all_rooms():
@@ -966,40 +925,41 @@ async def get_all_rooms():
     try:
         cursor = db_manager.db["rooms"].find({}).sort("room_code", 1)
         rooms = await cursor.to_list(length=None)
-        
-        formatted_rooms = []
-        for r in rooms:
-            formatted_rooms.append({
+
+        return [
+            {
                 "id": str(r["_id"]),
                 "room_code": r.get("room_code", ""),
                 "room_type": r.get("room_type", ""),
                 "capacity": r.get("capacity", 0)
-            })
-        return formatted_rooms
+            }
+            for r in rooms
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/rooms")
 async def add_new_room(room: RoomModel):
     """Adds a new lecture hall or lab to the system."""
     try:
-        # Check for duplicates
         existing = await db_manager.db["rooms"].find_one({"room_code": room.room_code.strip().upper()})
         if existing:
             raise HTTPException(status_code=400, detail=f"Room {room.room_code} already exists.")
-            
+
         new_room = {
             "room_code": room.room_code.strip().upper(),
             "room_type": room.room_type.strip().upper(),
             "capacity": room.capacity
         }
-        
+
         await db_manager.db["rooms"].insert_one(new_room)
         return {"message": f"Successfully added {room.room_code}"}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.delete("/api/rooms/{room_id}")
 async def delete_room(room_id: str):
@@ -1011,6 +971,7 @@ async def delete_room(room_id: str):
         return {"message": "Room successfully deleted."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.put("/api/rooms/{room_id}")
 async def update_room(room_id: str, room: RoomModel):
@@ -1032,31 +993,32 @@ async def update_room(room_id: str, room: RoomModel):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
-import hashlib
+# --- AUTHENTICATION & USER MANAGEMENT ---
 
 def hash_password(password: str):
     """Hashes passwords securely using SHA-256 for the database."""
     return hashlib.sha256(password.encode()).hexdigest()
 
+
 class UserModel(BaseModel):
     full_name: str
     email: str
     role: str  # 'TIMETABLE_OFFICER', 'CLASS_REP', or 'LECTURER'
-    cohort: str = "" 
-    password: str  # NEW: Added password field
+    cohort: str = ""
+    password: str
+
 
 class LoginRequest(BaseModel):
     email: str
     password: str
+
 
 @app.post("/api/auth/login")
 async def login_user(credentials: LoginRequest):
     """Authenticates a user and returns their role and cohort."""
     try:
         user = await db_manager.db["users"].find_one({"email": credentials.email.strip().lower()})
-        
-        # Verify user exists and hashed passwords match
+
         if not user or user.get("password") != hash_password(credentials.password):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -1072,25 +1034,27 @@ async def login_user(credentials: LoginRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/users")
 async def get_all_users():
     """Fetches all system users."""
     try:
         cursor = db_manager.db["users"].find({}).sort("role", 1)
         users = await cursor.to_list(length=None)
-        
-        formatted_users = []
-        for u in users:
-            formatted_users.append({
+
+        return [
+            {
                 "id": str(u["_id"]),
                 "full_name": u.get("full_name", ""),
                 "email": u.get("email", ""),
                 "role": u.get("role", ""),
                 "cohort": u.get("cohort", "")
-            })
-        return formatted_users
+            }
+            for u in users
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/users")
 async def add_new_user(user: UserModel):
@@ -1099,21 +1063,22 @@ async def add_new_user(user: UserModel):
         existing = await db_manager.db["users"].find_one({"email": user.email.strip().lower()})
         if existing:
             raise HTTPException(status_code=400, detail="User with this email already exists.")
-            
+
         new_user = {
             "full_name": user.full_name.strip(),
             "email": user.email.strip().lower(),
             "role": user.role,
             "cohort": user.cohort.strip().upper() if user.role == "CLASS_REP" else "ALL",
-            "password": hash_password(user.password) # Encrypt before saving
+            "password": hash_password(user.password)
         }
-        
+
         await db_manager.db["users"].insert_one(new_user)
         return {"message": "User successfully created"}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.delete("/api/users/{user_id}")
 async def delete_user(user_id: str):
@@ -1126,6 +1091,7 @@ async def delete_user(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- MASTER TIMETABLE & PORTAL ---
 
 @app.get("/api/filters")
 async def get_timetable_filters():
@@ -1133,17 +1099,17 @@ async def get_timetable_filters():
     try:
         cohorts = await db_manager.timetables.distinct("cohort")
         rooms = await db_manager.timetables.distinct("allocation.room_code")
-        
-        # Filter out invalid or empty entries and sort them
+
         valid_cohorts = sorted([c for c in cohorts if c and str(c).upper() != "UNKNOWN"])
         valid_rooms = sorted([r for r in rooms if r and str(r).upper() not in ["ZOOM", "VIRTUAL", "NAN", "NONE", "", "TBA"]])
-        
+
         return {
             "cohorts": valid_cohorts,
             "rooms": valid_rooms
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/timetable")
 async def get_master_timetable(cohort: Optional[str] = None, room: Optional[str] = None):
@@ -1155,16 +1121,14 @@ async def get_master_timetable(cohort: Optional[str] = None, room: Optional[str]
         if room:
             query["allocation.room_code"] = room
 
-        # Fetch records sorted by day and time
         cursor = db_manager.timetables.find(query).sort([
-            ("schedule.day_no", 1), 
+            ("schedule.day_no", 1),
             ("schedule.time_slot", 1)
         ])
         records = await cursor.to_list(length=None)
 
-        formatted_schedule = []
-        for r in records:
-            formatted_schedule.append({
+        return [
+            {
                 "id": str(r["_id"]),
                 "day": str(r.get("schedule", {}).get("day", "")).capitalize(),
                 "time_slot": r.get("schedule", {}).get("time_slot", ""),
@@ -1173,82 +1137,78 @@ async def get_master_timetable(cohort: Optional[str] = None, room: Optional[str]
                 "unit_name": r.get("unit_name", ""),
                 "room": r.get("allocation", {}).get("room_code", "TBA"),
                 "room_type": r.get("allocation", {}).get("room_type", "UNKNOWN")
-            })
-        
-        return formatted_schedule
+            }
+            for r in records
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/setup-admin")
 async def setup_first_admin():
     """Temporary endpoint to create the first Super Admin account."""
     try:
-        # Check if our admin already exists
         existing = await db_manager.db["users"].find_one({"email": "admin@kca.ac.ke"})
         if existing:
             return {"message": "Admin already exists! Go to /login"}
-            
-        # Create the new admin with a hashed password
+
         new_admin = {
             "full_name": "System Administrator",
             "email": "admin@kca.ac.ke",
             "role": "TIMETABLE_OFFICER",
             "cohort": "ALL",
-            "password": hash_password("KCAAdmin") 
+            "password": hash_password("KCAAdmin")
         }
-        
+
         await db_manager.db["users"].insert_one(new_admin)
         return {"message": "Success! You can now log in with email: admin@kca.ac.ke | password: Admin123!"}
     except Exception as e:
         return {"error": str(e)}
 
 
+# --- EMAIL BROADCAST ---
+
 class BroadcastRequest(BaseModel):
     subject: str
     message: str
+
 
 @app.post("/api/broadcast")
 async def broadcast_to_reps(payload: BroadcastRequest):
     """Fetches all Class Reps from MongoDB and sends them an email update."""
     try:
-        # 1. Fetch all Class Reps from the database
         cursor = db_manager.db["users"].find({"role": "CLASS_REP"})
         reps = await cursor.to_list(length=None)
-        
+
         if not reps:
             raise HTTPException(status_code=404, detail="No Class Reps found in the system.")
 
-        # 2. Configure your sender email (You will need a Gmail App Password)
-        sender_email = "faithndiangui12@gmail.com"  # actual Gmail
-        sender_password = "mbay sxhq blmj ebzf" # See instructions below
-        
-        # 3. Connect to Gmail's SMTP Server
+        sender_email = "faithndiangui12@gmail.com"
+        sender_password = "mbay sxhq blmj ebzf"
+
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(sender_email, sender_password)
-        
+
         success_count = 0
-        
-        # 4. Loop through each rep and send a personalized email
         for rep in reps:
             msg = MIMEMultipart()
             msg['From'] = f"KCA Timetable System <{sender_email}>"
             msg['To'] = rep["email"]
             msg['Subject'] = payload.subject
-            
-            # Personalize the email body
+
             full_message = f"Hello {rep.get('full_name', 'Student')},\n\n"
             full_message += f"{payload.message}\n\n"
             full_message += f"Your assigned cohort: {rep.get('cohort', 'Unknown')}\n"
             full_message += "View your live schedule here: http://localhost:5173/portal\n\n"
             full_message += "Regards,\nTimetable Administration"
-            
+
             msg.attach(MIMEText(full_message, 'plain'))
             server.send_message(msg)
             success_count += 1
-            
+
         server.quit()
         return {"status": "success", "message": f"Successfully emailed {success_count} Class Reps."}
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
